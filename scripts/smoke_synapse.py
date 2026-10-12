@@ -208,6 +208,25 @@ def main():
                 "Sent from another QQ device"),None),"self-first actual message")
         assert self_first["sender"].startswith("@_2bm_p_"),self_first
         assert self_first["sender"]!=expected,"self message impersonated contact"
+        pressure=api("GET",ADMIN,"/api/admin/queues/capacity",token=admin)
+        assert pressure["max_per_account"]==20000,pressure
+        # Enforce resource limits *before ACK*; large OneBot callbacks must
+        # receive a retryable/rejecting HTTP response, not fill SQLite.
+        try:
+            api("POST",AS,hook,{
+                "post_type":"message","message_type":"private",
+                "self_id":999,"user_id":123,"message_id":990009,
+                "raw_message":"x"*210000,
+                "sender":{"nickname":"Alice"}
+            },"local-hook")
+        except AssertionError as failure:
+            assert ": 413 " in str(failure),failure
+        else:
+            raise AssertionError("oversized authenticated QQ callback was accepted")
+        assert not any(item["source_key"].endswith(":990009")
+            for item in api("GET",ADMIN,"/api/admin/qq-inbox",
+                token=admin)["entries"])
+
         # An appservice encryption state event must quarantine the room:
         # forwarding QQ plaintext into a room flagged encrypted is forbidden.
         as_auth=os.environ["BRIDGE_MATRIX_HS_TOKEN"]
