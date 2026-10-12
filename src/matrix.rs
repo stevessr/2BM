@@ -93,6 +93,15 @@ pub async fn create_virtual_room(
     result["room_id"].as_str().map(str::to_owned)
         .ok_or_else(||anyhow::anyhow!("Matrix createRoom returned no room ID"))
 }
+pub async fn leave_ghost(state:&Arc<AppState>,room:&str,ghost:&str)->Result<()>{
+    state.http.post(format!("{}/_matrix/client/v3/rooms/{}/leave",
+        state.config.homeserver,urlencoding::encode(room)))
+        .bearer_auth(&state.config.as_token)
+        .query(&[("user_id",ghost)])
+        .json(&json!({}))
+        .send().await?.error_for_status()?;
+    Ok(())
+}
 pub async fn ensure_ghost_in_room(state:&Arc<AppState>,room:&str,ghost:&str)->Result<()>{
     // Most contacts are already joined (DM creators) or previously invited.
     if join_ghost(state,room,ghost).await.is_ok() {return Ok(());}

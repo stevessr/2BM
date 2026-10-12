@@ -70,6 +70,87 @@ pub async fn list_chats(state: &Arc<AppState>, account: &Account) -> Result<Vec<
     Ok(chats)
 }
 
+#[derive(serde::Serialize)]
+pub struct MemberSyncReport {
+    pub discovered: usize,
+    pub joined: usize,
+    pub failed: usize,
+}
+pub async fn sync_group_members(
+    state: &Arc<AppState>, account: &Account, chat: &str, limit: usize
+) -> Result<MemberSyncReport> {
+    if account.platform != "qq" { bail!("QQ account required"); }
+    let group: i64 = chat.strip_prefix("group:")
+        .context("expected group:<id>")?.parse()?;
+    if group <= 0 { bail!("invalid QQ group ID"); }
+    let mapping = crate::db::mapping_for_chat(&state.pool,&account.id,chat).await?
+        .context("virtual room must exist before membership sync")?;
+    let creds = crate::adapters::credentials(state,account)?;
+    let base=token(&creds,"api_base")?.trim_end_matches('/');
+    let response=state.http.get(format!("{base}/get_group_member_list"))
+        .bearer_auth(token(&creds,"access_token")?)
+        .query(&[("group_id",group)])
+        .send().await?.error_for_status()?;
+    let payload: Value=response.json().await?;
+    if payload["status"]!="ok" && payload["retcode"]!=0 {
+        bail!("OneBot get_group_member_list failed: {}",payload["retcode"]);
+    }
+    let members=payload["data"].as_array()
+        .context("OneBot get_group_member_list returned no array")?;
+    let mut report=MemberSyncReport {discovered:members.len(),joined:0,failed:0};
+    // Large QQ groups may contain thousands of members. A batch only provisions
+    // the first limited roster slice; live notices cover later arrivals.
+    for member in members.iter().take(limit.clamp(1,100)) {
+        let Some(id)=member["user_id"].as_i64().filter(|x|*x>0) else {continue};
+        let name=member["card"].as_str().filter(|n|!n.is_empty())
+            .or_else(||member["nickname"].as_str()).unwrap_or("QQ user");
+        let outcome=async {
+            let ghost=crate::matrix::ghost(state,&account.id,&id.to_string(),name).await?;
+            crate::matrix::ensure_ghost_in_room(state,&mapping.matrix_room,&ghost).await
+        }.await;
+        match outcome {
+            Ok(())=>report.joined+=1,
+            Err(error)=>{
+                report.failed+=1;
+                tracing::warn!(account=%account.id,group,member=id,%error,"QQ group member sync failed");
+            }
+        }
+    }
+    Ok(report)
+}
+
+pub fn membership_target(event:&Value)->Option<(String,String,bool)>{
+    let group=event["group_id"].as_i64().filter(|n|*n>0)?;
+    let user=event["user_id"].as_i64().filter(|n|*n>0)?;
+    let joined=match event["notice_type"].as_str()? {
+        "group_increase"=>true,
+        "group_decrease"=>false,
+        _=>return None,
+    };
+    Some((format!("group:{group}"),user.to_string(),joined))
+}
+
+pub async fn membership_notice(
+    state:&Arc<AppState>,account:&Account,chat:&str,contact:&str,joined:bool
+)->Result<()>{
+    // Never create a room purely from an untrusted notification.
+    let Some(mapping)=crate::db::mapping_for_chat(&state.pool,&account.id,chat).await? else {
+        return Ok(());
+    };
+    let mxid=crate::matrix::ghost_user_id(state,&account.id,contact);
+    if joined {
+        let ghost=crate::matrix::ghost(state,&account.id,contact,
+            &format!("QQ {contact}")).await?;
+        crate::matrix::ensure_ghost_in_room(state,&mapping.matrix_room,&ghost).await?;
+    } else {
+        // A departure can be delivered repeatedly or before a join.
+        if let Err(error)=crate::matrix::leave_ghost(state,&mapping.matrix_room,&mxid).await {
+            tracing::debug!(%error,room=%mapping.matrix_room,"QQ group leave may already be applied");
+        }
+    }
+    Ok(())
+}
+
 pub fn recall_target(event:&Value)->Option<(String,String)>{
     let msg=event["message_id"].as_i64().map(|id|id.to_string())
         .or_else(||event["message_id"].as_str().map(str::to_owned))?;
@@ -92,6 +173,14 @@ pub fn chat_id(event: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn classify_membership_notices() {
+        assert_eq!(membership_target(&json!({"notice_type":"group_increase","group_id":12,"user_id":34})),
+            Some(("group:12".into(),"34".into(),true)));
+        assert_eq!(membership_target(&json!({"notice_type":"group_decrease","group_id":12,"user_id":34})),
+            Some(("group:12".into(),"34".into(),false)));
+        assert_eq!(membership_target(&json!({"notice_type":"group_recall","group_id":12,"user_id":34})),None);
+    }
     #[test]
     fn classify_onebot_recall_events() {
         assert_eq!(recall_target(&json!({"notice_type":"group_recall","group_id":25,"message_id":14})),

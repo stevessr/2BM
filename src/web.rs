@@ -26,6 +26,7 @@ pub fn admin_router() -> Router<Arc<AppState>> {
         .route("/api/admin/accounts/{id}/telegram/verify", post(telegram_verify))
         .route("/api/admin/accounts/{id}/sync", post(sync_virtual_rooms))
         .route("/api/admin/virtual-rooms", get(list_virtual_rooms))
+        .route("/api/admin/accounts/{id}/qq/members",post(sync_qq_members))
         .route("/api/admin/mappings", get(list_mappings).post(create_mapping))
         .route("/api/admin/mappings/{id}", delete(delete_mapping))
 }
@@ -228,6 +229,25 @@ struct VirtualRoomInfo {
     matrix_room: Option<String>,
     updated_at: String,
 }
+#[derive(Deserialize)]
+struct MemberSyncRequest {
+    chat: String,
+    limit: Option<usize>,
+}
+async fn sync_qq_members(
+    State(state):State<Arc<AppState>>,headers:HeaderMap,Path(id):Path<String>,
+    Json(request):Json<MemberSyncRequest>
+)->ApiResult<Json<Value>>{
+    admin_check(&headers,&state)?;
+    let account=db::account(&state.pool,&id).await.map_err(internal)?
+        .filter(|a|a.enabled && a.platform=="qq")
+        .ok_or_else(||error(StatusCode::NOT_FOUND,"enabled QQ account not found"))?;
+    let report=adapters::qq::sync_group_members(
+        &state,&account,&request.chat,request.limit.unwrap_or(30).clamp(1,100)
+    ).await.map_err(|e|error(StatusCode::UNPROCESSABLE_ENTITY,&e.to_string()))?;
+    Ok(Json(json!(report)))
+}
+
 async fn list_virtual_rooms(
     State(state): State<Arc<AppState>>,headers:HeaderMap
 )->ApiResult<Json<Value>>{
@@ -373,6 +393,10 @@ async fn qq_hook(
     if body["post_type"] == "notice" {
         if let Some((chat,id)) = crate::adapters::qq::recall_target(&body) {
             relay::recall(&state,&account_id,&chat,&id).await.map_err(internal)?;
+        } else if let Some((chat,contact,joined)) =
+            crate::adapters::qq::membership_target(&body) {
+            adapters::qq::membership_notice(&state,&account,&chat,&contact,joined)
+                .await.map_err(internal)?;
         }
         return Ok(Json(json!({})));
     }
