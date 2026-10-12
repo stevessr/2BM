@@ -30,6 +30,14 @@ pub async fn drain_qq_own(state:&Arc<AppState>,limit:i64)->Result<usize>{
         // Do not lose a queued message if the decryption key is misconfigured;
         // the record stays in SQLite for operator-controlled recovery.
         let result:Result<()> = async {
+            // Accounts can be disabled between durable HTTP ACK and worker
+            // delivery. Retain the envelope instead of silently discarding
+            // it through relay::incoming's disabled-account no-op.
+            let active=crate::db::account(&state.pool,&account).await?
+                .is_some_and(|a|a.enabled && a.platform=="qq");
+            if !active {
+                anyhow::bail!("QQ account is disabled or missing; queued message retained");
+            }
             let msg:Value=crypto::decrypt(&state.config.credential_key,&sealed)
                 .context("cannot decrypt queued QQ webhook")?;
             let chat=msg["chat"].as_str().context("queued QQ chat missing")?;
@@ -124,6 +132,17 @@ mod tests {
             .fetch_one(&state.pool).await.unwrap();
         assert_eq!(delayed,1);
         assert_eq!(drain_qq_own(&state,10).await.unwrap(),0);
+
+        // A disabled account must never cause its durable callback to be
+        // ACKed and removed by the background worker.
+        sqlx::query("UPDATE qq_own_inbox SET sealed=?,next_attempt_at='1970-01-01'
+            WHERE account_id='qq'")
+            .bind(&payload).execute(&state.pool).await.unwrap();
+        sqlx::query("UPDATE accounts SET enabled=0 WHERE id='qq'")
+            .execute(&state.pool).await.unwrap();
+        assert_eq!(drain_qq_own(&state,10).await.unwrap(),0);
+        assert_eq!(queued_count(&state).await.unwrap(),1);
+
         state.pool.close().await;
         drop(state);
         let _=std::fs::remove_file(path);
