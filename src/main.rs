@@ -14,7 +14,7 @@ use axum::Router;
 use config::Config;
 use sqlx::SqlitePool;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
-use tracing::{info, warn};
+use tracing::info;
 
 pub struct AppState {
     pub config: Config,
@@ -45,9 +45,10 @@ async fn main() -> Result<()> {
         .build()?;
     let state = Arc::new(AppState { config, pool, http, telegram: telegram_user::Gateway::default(), room_creation: tokio::sync::Mutex::new(()) });
 
-    if let Err(error) = matrix::register_bot(&state).await {
-        warn!(%error, "Matrix bot registration failed; check appservice registration");
-    }
+    // A service that serves 200 /healthz without a functional appservice
+    // silently loses messages. Fail startup until the homeserver registration
+    // is correct (container restart policy retries after transient outages).
+    matrix::register_bot(&state).await?;
     tokio::spawn(workers::run(state.clone()));
 
     let config = &state.config;

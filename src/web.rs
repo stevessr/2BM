@@ -35,6 +35,7 @@ pub fn admin_router() -> Router<Arc<AppState>> {
 pub fn matrix_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/healthz", get(|| async { Json(json!({"status":"ok"})) }))
+        .route("/readyz", get(readiness))
         .route("/_matrix/app/v1/transactions/{txn}", put(transaction))
         .route("/_matrix/app/v1/ping", post(ping))
         .route("/_matrix/app/v1/users/{user}", get(query_user))
@@ -371,6 +372,25 @@ async fn transaction(
     Ok(Json(json!({})))
 }
 
+async fn readiness(
+    State(state):State<Arc<AppState>>
+)->ApiResult<Json<Value>> {
+    let db: i64 = sqlx::query_scalar("SELECT 1")
+        .fetch_one(&state.pool).await.map_err(|_|error(
+            StatusCode::SERVICE_UNAVAILABLE,"database unavailable"))?;
+    if db != 1 {
+        return Err(error(StatusCode::SERVICE_UNAVAILABLE,"database not ready"));
+    }
+    let response=state.http.get(format!("{}/_matrix/client/versions",
+        state.config.homeserver))
+        .timeout(std::time::Duration::from_secs(5))
+        .send().await.map_err(|_|error(
+            StatusCode::SERVICE_UNAVAILABLE,"Matrix homeserver unavailable"))?;
+    if !response.status().is_success() {
+        return Err(error(StatusCode::SERVICE_UNAVAILABLE,"Matrix homeserver not ready"));
+    }
+    Ok(Json(json!({"status":"ready"})))
+}
 async fn ping(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap, Query(query): Query<HashMap<String, String>>

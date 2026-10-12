@@ -47,7 +47,86 @@ def main() -> None:
         "namespaces:\n"
         "  users:\n"
         "    - exclusive: true\n"
-        f"      regex: '@_2bm:{server}'\n" +
+        f"      regex: '^@_2bm:{server} +
+        "    - exclusive: true\n" +
+        f"      regex: '^@_2bm_p_[0-9a-f]{{32}}:{server}
+        "  aliases:\n" +
+        "    - exclusive: true\n" +
+        f"      regex: '^#_2bm_r_[0-9a-f]{{32}}:{server}
+        "  rooms: []\n"
+    )
+    args.output.write_text(content, encoding="utf-8")
+    args.output.chmod(0o600)
+    print(f"Wrote {args.output} (mode 0600); register with your Matrix homeserver")
+
+if __name__ == "__main__":
+    main()
+\n" +
+        "    - exclusive: true\n" +
+        f"      regex: '@_2bm_p_[0-9a-f]{{32}}:{server}'\n"
+        "  aliases: []\n"
+        "  rooms: []\n"
+    )
+    args.output.write_text(content, encoding="utf-8")
+    args.output.chmod(0o600)
+    print(f"Wrote {args.output} (mode 0600); register with your Matrix homeserver")
+
+if __name__ == "__main__":
+    main()
+\n"
+        "  aliases: []\n"
+        "  rooms: []\n"
+    )
+    args.output.write_text(content, encoding="utf-8")
+    args.output.chmod(0o600)
+    print(f"Wrote {args.output} (mode 0600); register with your Matrix homeserver")
+
+if __name__ == "__main__":
+    main()
+\n" +
+        "    - exclusive: true\n" +
+        f"      regex: '@_2bm_p_[0-9a-f]{{32}}:{server}'\n"
+        "  aliases: []\n"
+        "  rooms: []\n"
+    )
+    args.output.write_text(content, encoding="utf-8")
+    args.output.chmod(0o600)
+    print(f"Wrote {args.output} (mode 0600); register with your Matrix homeserver")
+
+if __name__ == "__main__":
+    main()
+\n"
+        "  rooms: []\n"
+    )
+    args.output.write_text(content, encoding="utf-8")
+    args.output.chmod(0o600)
+    print(f"Wrote {args.output} (mode 0600); register with your Matrix homeserver")
+
+if __name__ == "__main__":
+    main()
+\n" +
+        "    - exclusive: true\n" +
+        f"      regex: '@_2bm_p_[0-9a-f]{{32}}:{server}'\n"
+        "  aliases: []\n"
+        "  rooms: []\n"
+    )
+    args.output.write_text(content, encoding="utf-8")
+    args.output.chmod(0o600)
+    print(f"Wrote {args.output} (mode 0600); register with your Matrix homeserver")
+
+if __name__ == "__main__":
+    main()
+\n"
+        "  aliases: []\n"
+        "  rooms: []\n"
+    )
+    args.output.write_text(content, encoding="utf-8")
+    args.output.chmod(0o600)
+    print(f"Wrote {args.output} (mode 0600); register with your Matrix homeserver")
+
+if __name__ == "__main__":
+    main()
+\n" +
         "    - exclusive: true\n" +
         f"      regex: '@_2bm_p_[0-9a-f]{{32}}:{server}'\n"
         "  aliases: []\n"
