@@ -122,7 +122,11 @@ async fn list_qq_inbox(
     // Never expose encrypted body or decrypted private QQ message content.
     let entries:Vec<QqInboxInfo>=sqlx::query_as(
         "SELECT account_id,source_key,attempts,received_at,next_attempt_at,last_error
-         FROM qq_own_inbox ORDER BY received_at ASC LIMIT 200")
+         FROM qq_own_inbox
+         UNION ALL
+         SELECT account_id,source_key,attempts,received_at,next_attempt_at,last_error
+         FROM qq_events_inbox
+         ORDER BY received_at ASC LIMIT 200")
         .fetch_all(&state.pool).await.map_err(internal)?;
     let total=crate::inbox::queued_count(&state).await.map_err(internal)?;
     Ok(Json(json!({"pending":total,"entries":entries})))
@@ -562,11 +566,15 @@ async fn qq_hook(
         return Err(error(StatusCode::UNAUTHORIZED, "invalid OneBot webhook token"));
     }
     if body["post_type"] == "notice" {
-        if let Some((chat,id)) = crate::adapters::qq::recall_target(&body) {
-            relay::recall(&state,&account_id,&chat,&id).await.map_err(internal)?;
-        } else if let Some((chat,contact,joined)) =
-            crate::adapters::qq::membership_target(&body) {
-            adapters::qq::membership_notice(&state,&account,&chat,&contact,joined)
+        let key=if let Some((chat,id))=adapters::qq::recall_target(&body) {
+            Some(format!("{account_id}:recall:{chat}:{id}"))
+        }else if adapters::qq::membership_target(&body).is_some() {
+            // OneBot has no stable unique membership-notice ID. Retaining
+            // each notice preserves rapid leave+join sequences.
+            Some(format!("{account_id}:membership:{}",Uuid::new_v4()))
+        }else{None};
+        if let Some(key)=key {
+            crate::inbox::enqueue_qq_event(&state,&account_id,&key,&body)
                 .await.map_err(internal)?;
         }
         return Ok(Json(json!({})));
@@ -600,8 +608,8 @@ async fn qq_hook(
         crate::inbox::enqueue_qq_own(&state,&account_id,&chat,&message_id,&text)
             .await.map_err(internal)?;
     } else {
-        relay::incoming_with_reply(&state,&account_id,&chat,&message_id,
-            &sender_id,sender,&text,reply_to.as_deref())
+        let key=format!("{account_id}:message:{chat}:{message_id}");
+        crate::inbox::enqueue_qq_event(&state,&account_id,&key,&body)
             .await.map_err(internal)?;
     }
     Ok(Json(json!({})))
