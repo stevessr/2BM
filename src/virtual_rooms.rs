@@ -185,6 +185,9 @@ mod tests {
             else {(StatusCode::CONFLICT,Json(json!({"errcode":"M_ROOM_IN_USE"})))}
         }
         async fn resolve()->Json<Value> {Json(json!({"room_id":"!stable:example.org"}))}
+        async fn bridge_state()->Json<Value> {Json(json!({
+            "network":"2bm","account_id":"test-account","external_chat":"group:987"
+        }))}
 
         let mock=Arc::new(Mock {
             creates:AtomicUsize::new(0),
@@ -195,6 +198,7 @@ mod tests {
         let router=Router::new()
             .route("/_matrix/client/v3/createRoom",post(create))
             .route("/_matrix/client/v3/directory/room/{alias}",get(resolve))
+            .route("/_matrix/client/v3/rooms/{room}/state/com.2bm.bridge",get(bridge_state))
             .with_state(mock.clone());
         let server=tokio::spawn(async move {
             axum::serve(listener,router).await.unwrap();

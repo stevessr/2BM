@@ -84,8 +84,24 @@ pub async fn create_virtual_room(
             state.config.homeserver,urlencoding::encode(&alias)))
             .bearer_auth(&state.config.as_token).send().await?.error_for_status()?;
         let body:Value=lookup.json().await?;
-        return body["room_id"].as_str().map(str::to_owned)
-            .ok_or_else(||anyhow::anyhow!("room alias conflict but resolution gave no room ID"));
+        let room=body["room_id"].as_str()
+            .ok_or_else(||anyhow::anyhow!("room alias conflict but resolution gave no room ID"))?;
+        // Alias lookup alone cannot prove ownership. A room can be created
+        // independently with the same alias, even after DB loss. Never bind
+        // private account conversations to an unverified room.
+        let request=state.http.get(format!(
+            "{}/_matrix/client/v3/rooms/{}/state/com.2bm.bridge",
+            state.config.homeserver,urlencoding::encode(room)))
+            .bearer_auth(&state.config.as_token);
+        let request=if let Some(user)=creator {
+            request.query(&[("user_id",user)])
+        } else {request};
+        let bridge:Value=request.send().await?.error_for_status()?.json().await?;
+        if bridge["network"]!="2bm" ||
+            bridge["account_id"]!=account || bridge["external_chat"]!=chat {
+            bail!("virtual room alias collision: room bridge ownership did not match");
+        }
+        return Ok(room.to_owned());
     }
     let response=response.error_for_status()?;
     let result:Value=response.json().await?;
