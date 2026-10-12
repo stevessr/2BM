@@ -17,10 +17,21 @@ async fn register(state: &Arc<AppState>, localpart: &str) -> Result<()> {
     if body["errcode"]=="M_USER_IN_USE" {return Ok(());}
     bail!("Matrix registration {status}: {body}")
 }
-pub async fn ghost(state: &Arc<AppState>,account:&str,sender:&str,display:&str)->Result<String>{
+pub fn ghost_user_id(state:&Arc<AppState>,account:&str,sender:&str)->String{
     let name = format!("_2bm_p_{}",Uuid::new_v5(&Uuid::NAMESPACE_URL,format!("{account}:{sender}").as_bytes()).simple());
-    register(state,&name).await?;
-    let mxid=format!("@{}:{}",name,state.config.server_name);
+    format!("@{}:{}",name,state.config.server_name)
+}
+pub async fn ghost(state: &Arc<AppState>,account:&str,sender:&str,display:&str)->Result<String>{
+    let mxid=ghost_user_id(state,account,sender);
+    let previous: Option<String> = sqlx::query_scalar(
+        "SELECT display_name FROM ghost_users WHERE mxid = ?")
+        .bind(&mxid).fetch_optional(&state.pool).await?;
+    if previous.as_deref() == Some(display) { return Ok(mxid); }
+    if previous.is_none() {
+        let localpart = mxid.trim_start_matches('@')
+            .split(':').next().ok_or_else(||anyhow::anyhow!("invalid ghost MXID"))?;
+        register(state,localpart).await?;
+    }
     let response=state.http.put(format!("{}/_matrix/client/v3/profile/{}/displayname",
         state.config.homeserver,urlencoding::encode(&mxid)))
         .bearer_auth(&state.config.as_token)

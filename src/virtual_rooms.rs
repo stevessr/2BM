@@ -24,6 +24,7 @@ pub struct SyncReport {
     pub discovered: usize,
     pub provisioned: usize,
     pub failed: usize,
+    pub already_present: usize,
 }
 
 /// A serialized critical section prevents two concurrent messages from making
@@ -48,18 +49,20 @@ pub async fn ensure(
         .bind(&account.id).bind(&chat.external_chat).bind(&title).bind(chat.direct)
         .execute(&state.pool).await?;
 
+    let sender_ghost = if let Some((sender_id, name)) = sender {
+        Some(matrix::ghost(state, &account.id, sender_id,
+            &format!("{} ({})",name,account.platform)).await?)
+    } else { None };
     let mapping = if let Some(existing) =
         db::mapping_for_chat(&state.pool, &account.id, &chat.external_chat).await? {
         existing
     } else {
         let initial_ghost = if chat.direct {
-            if let Some(contact) = chat.contact_id.as_deref() {
+            if let Some(ghost) = sender_ghost.as_deref() {
+                Some(ghost.to_owned())
+            } else if let Some(contact) = chat.contact_id.as_deref() {
                 Some(matrix::ghost(state, &account.id, contact, &title).await?)
-            } else if let Some((sender_id, name)) = sender {
-                Some(matrix::ghost(state, &account.id, sender_id, name).await?)
-            } else {
-                None
-            }
+            } else { None }
         } else { None };
         let room = matrix::create_virtual_room(
             state, &account.id, &chat.external_chat, &title,
@@ -72,9 +75,8 @@ pub async fn ensure(
         db::mapping_for_chat(&state.pool, &account.id, &chat.external_chat)
             .await?.context("unable to persist provisioned room")?
     };
-    if let Some((sender_id, name)) = sender {
-        let ghost = matrix::ghost(state, &account.id, sender_id, name).await?;
-        matrix::ensure_ghost_in_room(state, &mapping.matrix_room, &ghost).await?;
+    if let Some(ghost) = sender_ghost.as_deref() {
+        matrix::ensure_ghost_in_room(state, &mapping.matrix_room, ghost).await?;
     }
     Ok(mapping)
 }
@@ -88,8 +90,18 @@ pub async fn sync(
         _ => anyhow::bail!("only QQ and Telegram human-account modes support chat discovery"),
     };
     let discovered = conversations.len();
-    let mut report = SyncReport { discovered, provisioned: 0, failed: 0 };
-    for chat in conversations.into_iter().take(limit) {
+    let mut report = SyncReport {
+        discovered, provisioned: 0, failed: 0, already_present: 0
+    };
+    let mut attempted = 0;
+    for chat in conversations {
+        if db::mapping_for_chat(&state.pool,&account.id,&chat.external_chat)
+            .await?.is_some() {
+            report.already_present += 1;
+            continue;
+        }
+        if attempted >= limit { break; }
+        attempted += 1;
         match ensure(state, account, &chat, None).await {
             Ok(_) => report.provisioned += 1,
             Err(error) => {

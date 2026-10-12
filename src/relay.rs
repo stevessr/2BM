@@ -23,8 +23,7 @@ pub async fn incoming(
     let mapping = crate::virtual_rooms::ensure(
         state, &account, &descriptor, Some((sender_id,sender))
     ).await?;
-    let ghost = matrix::ghost(state,account_id,sender_id,
-        &format!("{} ({})",sender,account.platform)).await?;
+    let ghost = matrix::ghost_user_id(state,account_id,sender_id);
     let txn = Uuid::new_v5(&Uuid::NAMESPACE_URL,source_key.as_bytes()).to_string();
     matrix::send_as(state,&mapping.matrix_room,text,&txn,&ghost).await?;
     sqlx::query("INSERT OR IGNORE INTO incoming(source_key) VALUES (?)")

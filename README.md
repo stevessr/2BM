@@ -32,7 +32,9 @@ Accounts and external chats are mapped to Matrix rooms. Incoming messages appear
 
 **Telegram Bot compatibility mode:** Create a bot in BotFather, add it to your chats, and configure its privacy settings and message access as needed. Do not poll the same bot token elsewhere.
 
-**Telegram personal account (Rust MTProto):** Create an API ID and API hash at my.telegram.org. In WebUI choose **Telegram 真人账号**, set the owner Matrix ID and the API credentials, then in the Telegram login section send the verification code to your phone and enter it, followed by your 2FA password if prompted. Verified accounts automatically reconnect on restart using the saved session SQLite file. Telegram session files contain authorization keys and must be kept private.\n\n**Discord (currently BOT mode; ordinary user automation violates Discord policy)**: Create an application/bot and grant it read/send access. Enable the privileged **Message Content Intent** to receive message content. Use a bot token, not a user token.
+**Telegram personal account (Rust MTProto):** Create an API ID and API hash at my.telegram.org. In WebUI choose **Telegram 真人账号**, set the owner Matrix ID and the API credentials, then enter your phone verification code and optional 2FA password. Authorized accounts reconnect using session SQLite files. Telegram sessions contain authorization keys and must be kept private.
+
+**Discord (currently BOT mode; ordinary user automation violates Discord policy)**: Create an application/bot and grant it read/send access. Enable the privileged **Message Content Intent** to receive message content. Use a bot token, not a user token.
 
 **QQ (HUMAN account)**: Perform QQ login in **NapCat or another OneBot 11-compatible connector**. In WebUI, supply `api_base` (e.g. `http://napcat:3000`), `access_token`, and `hook_secret`. Configure OneBot HTTP event delivery to:
 
@@ -57,7 +59,8 @@ The account ID is visible in WebUI. Some OneBot connectors use their API token a
 | `BRIDGE_MATRIX_HS_TOKEN` | Homeserver token matching registration |
 | `BRIDGE_ADMIN_TOKEN` | Admin REST API Bearer token (min 24 chars) |
 | `BRIDGE_CREDENTIAL_KEY` | XChaCha20-Poly1305 encryption key (64 hex characters) |
-| `BRIDGE_DATABASE_URL` | SQLite URL, default `sqlite://data/2bm.sqlite` |\n| `BRIDGE_TG_SESSION_DIR` | Telegram personal MTProto session directory (protect as highly sensitive) |
+| `BRIDGE_DATABASE_URL` | SQLite URL, default `sqlite://data/2bm.sqlite` |
+| `BRIDGE_TG_SESSION_DIR` | Telegram personal MTProto session directory (protect as highly sensitive) |
 | `RUST_LOG` | Runtime log filter |
 
 **Telegram MTProto session files are currently unencrypted SQLite storage, separate from encrypted account settings**. Restrict filesystem permissions, keep backups private, and do not expose the session directory through the WebUI. Back up **both** SQLite and the key: the encrypted account credentials cannot be recovered without the key. Admin credentials must be protected by HTTPS when accessed remotely. Docker Compose exposes both ports on localhost only by default; adjust networking for your homeserver/OneBot connector.
@@ -93,3 +96,16 @@ MIT licensed. See `LICENSE`.
 
 ### Build prerequisites
 Install `pkg-config` and `libsqlite3-dev` on Debian/Ubuntu. SQLx dynamically links to the system SQLite shared object via `.cargo/config.toml`, while Telegram Grammers uses libsql's bundled SQLite; this avoids duplicate `sqlite3_*` symbols at link time.
+
+## Virtual rooms (default)
+
+2BM creates **real, private Matrix rooms managed as virtual external conversations**, not synthetic ephemeral rooms. This works in standard Element/FluffyChat clients. On startup QQ contacts/groups are discovered through OneBot, while Telegram contacts/chats are discovered from MTProto user dialogs; Matrix owners are automatically invited. New messages also lazily create rooms. There is no history backfill yet.
+
+- DM: the external contact's Matrix ghost user creates the room and invites the configured Matrix owner. Group: the 2BM service user creates the room, while group participants join as individual ghost users when they send messages.
+- Every external chat has an opaque deterministic alias `#_2bm_r_<uuid>:server`. If room creation succeeds but SQLite persistence fails, a retry resolves the existing alias rather than creating a second room.
+- `GET /api/admin/virtual-rooms` lists discovered rooms. `POST /api/admin/accounts/{id}/sync` with JSON `{"limit":50}` synchronizes the next batch of unmapped conversations (1–100 per request); repeat to progressively provision the remaining chats.
+- Background provisioning starts with up to 30 existing conversations per QQ account (every ten minutes) and Telegram user account (on session reconnect). Telegram dialog discovery currently caps each scan at 200 conversations; larger accounts will require pagination support.
+- SQLite persists the virtual-chat catalogue and the ghost MXID registry. Manual mappings remain available under the advanced section of WebUI.
+- Private rooms still reside on the Matrix homeserver and count against its storage. Matrix E2EE and full remote membership/history mirroring remain unsupported.
+
+**Operational note:** the first sync can issue many Matrix createRoom, register, profile, and invite requests. Keep the batch size moderate to avoid Matrix homeserver rate limits and do not run several 2BM processes against the same accounts.

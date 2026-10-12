@@ -254,7 +254,8 @@
       });
       await refresh();
       showMessage('发现 ' + result.discovered + ' 个会话，本次处理 ' +
-        result.provisioned + ' 个，失败 ' + result.failed + ' 个。');
+        result.provisioned + ' 个，已存在 ' + result.already_present +
+        ' 个，失败 ' + result.failed + ' 个。');
     } catch(err) { showMessage(err); }
     finally { $('syncChats').disabled = false; }
   });
