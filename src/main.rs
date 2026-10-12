@@ -6,6 +6,7 @@ mod matrix;
 mod telegram_user;
 mod relay;
 mod web;
+mod virtual_rooms;
 mod workers;
 
 use anyhow::Result;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub http: reqwest::Client,
     pub telegram: telegram_user::Gateway,
+    pub room_creation: tokio::sync::Mutex<()>,
 }
 
 #[tokio::main]
@@ -41,7 +43,7 @@ async fn main() -> Result<()> {
         .timeout(Duration::from_secs(35))
         .user_agent("2BM/0.1")
         .build()?;
-    let state = Arc::new(AppState { config, pool, http, telegram: telegram_user::Gateway::default() });
+    let state = Arc::new(AppState { config, pool, http, telegram: telegram_user::Gateway::default(), room_creation: tokio::sync::Mutex::new(()) });
 
     if let Err(error) = matrix::register_bot(&state).await {
         warn!(%error, "Matrix bot registration failed; check appservice registration");

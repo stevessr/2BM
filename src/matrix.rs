@@ -1,75 +1,99 @@
-use crate::AppState;
+use crate::{virtual_rooms, AppState};
 use anyhow::{bail, Result};
+use reqwest::StatusCode;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub async fn register_bot(state: &Arc<AppState>) -> Result<()> {
-    register(state, "_2bm").await
-}
+pub async fn register_bot(state: &Arc<AppState>) -> Result<()> { register(state,"_2bm").await }
 async fn register(state: &Arc<AppState>, localpart: &str) -> Result<()> {
-    let response = state.http.post(format!("{}/_matrix/client/v3/register?kind=user", state.config.homeserver))
+    let response = state.http.post(format!("{}/_matrix/client/v3/register?kind=user",state.config.homeserver))
         .bearer_auth(&state.config.as_token)
         .json(&json!({"type":"m.login.application_service","username":localpart,"inhibit_login":true}))
         .send().await?;
     let status = response.status();
-    if status.is_success() { return Ok(()); }
+    if status.is_success() {return Ok(());}
     let body: Value = response.json().await.unwrap_or(Value::Null);
-    if body["errcode"] == "M_USER_IN_USE" { return Ok(()); }
+    if body["errcode"]=="M_USER_IN_USE" {return Ok(());}
     bail!("Matrix registration {status}: {body}")
 }
-pub async fn ghost(state: &Arc<AppState>, account: &str, sender: &str, display: &str) -> Result<String> {
-    let key = format!("{account}:{sender}");
-    let name = format!("_2bm_p_{}", Uuid::new_v5(&Uuid::NAMESPACE_URL, key.as_bytes()).simple());
-    register(state, &name).await?;
-    let mxid = format!("@{}:{}", name, state.config.server_name);
-    let response = state.http.put(format!("{}/_matrix/client/v3/profile/{}/displayname", state.config.homeserver, urlencoding::encode(&mxid)))
+pub async fn ghost(state: &Arc<AppState>,account:&str,sender:&str,display:&str)->Result<String>{
+    let name = format!("_2bm_p_{}",Uuid::new_v5(&Uuid::NAMESPACE_URL,format!("{account}:{sender}").as_bytes()).simple());
+    register(state,&name).await?;
+    let mxid=format!("@{}:{}",name,state.config.server_name);
+    let response=state.http.put(format!("{}/_matrix/client/v3/profile/{}/displayname",
+        state.config.homeserver,urlencoding::encode(&mxid)))
         .bearer_auth(&state.config.as_token)
         .query(&[("user_id",&mxid)])
         .json(&json!({"displayname":display.chars().take(100).collect::<String>()}))
         .send().await;
-    if let Err(e) = response { tracing::debug!(%e,"unable to set ghost display name"); }
+    if let Err(error)=response {tracing::debug!(%error,"unable to update ghost display name");}
     Ok(mxid)
 }
-pub async fn join_bot(state: &Arc<AppState>, room: &str) -> Result<()> {
-    join(state, room, None).await
-}
-pub async fn join_ghost(state: &Arc<AppState>, room: &str, mxid: &str) -> Result<()> {
-    join(state, room, Some(mxid)).await
-}
-async fn join(state: &Arc<AppState>, room: &str, as_user: Option<&str>) -> Result<()> {
-    let req = state.http.post(format!("{}/_matrix/client/v3/join/{}", state.config.homeserver, urlencoding::encode(room)))
-        .bearer_auth(&state.config.as_token);
-    let req = if let Some(user) = as_user { req.query(&[("user_id",user)]) } else { req };
-    req.json(&json!({})).send().await?.error_for_status()?;
+pub async fn join_bot(state:&Arc<AppState>,room:&str)->Result<()> {join(state,room,None).await}
+pub async fn join_ghost(state:&Arc<AppState>,room:&str,user:&str)->Result<()> {join(state,room,Some(user)).await}
+async fn join(state:&Arc<AppState>,room:&str,as_user:Option<&str>)->Result<()>{
+    let request=state.http.post(format!("{}/_matrix/client/v3/join/{}",
+        state.config.homeserver,urlencoding::encode(room))).bearer_auth(&state.config.as_token);
+    let request=if let Some(u)=as_user {request.query(&[("user_id",u)])}else{request};
+    request.json(&json!({})).send().await?.error_for_status()?;
     Ok(())
 }
-pub async fn create_room(state: &Arc<AppState>, platform: &str, chat: &str, owner: &str, ghost: &str) -> Result<String> {
-    let response = state.http.post(format!("{}/_matrix/client/v3/createRoom", state.config.homeserver))
-        .bearer_auth(&state.config.as_token)
-        .json(&json!({"preset":"private_chat","visibility":"private",
-            "name":format!("{} · {}",platform,chat),"invite":[owner,ghost]}))
-        .send().await?.error_for_status()?;
-    let body: Value = response.json().await?;
-    let room = body["room_id"].as_str().ok_or_else(|| anyhow::anyhow!("room ID missing"))?;
-    join_ghost(state, room, ghost).await?;
-    Ok(room.to_string())
-}
-pub async fn ensure_ghost_in_room(state: &Arc<AppState>, room: &str, ghost: &str) -> Result<()> {
-    // The Matrix homeserver may return M_FORBIDDEN when the user was already invited/joined.
-    let r = state.http.post(format!("{}/_matrix/client/v3/rooms/{}/invite",
-            state.config.homeserver,urlencoding::encode(room)))
-        .bearer_auth(&state.config.as_token)
-        .json(&json!({"user_id":ghost}))
-        .send().await?;
-    if !r.status().is_success() {
-        tracing::debug!(status=%r.status(),"invite may be redundant");
+/// Matrix alias makes provisioning crash-idempotent. 409 is only treated as a
+/// recovery if the exact alias resolves to a room; other failures propagate.
+pub async fn create_virtual_room(
+    state:&Arc<AppState>,account:&str,chat:&str,title:&str,
+    owner:&str,initial_ghost:Option<&str>,direct:bool
+)->Result<String>{
+    let localpart=virtual_rooms::alias(account,chat);
+    let alias=format!("#{}:{}",localpart,state.config.server_name);
+    let creator=if direct {initial_ghost} else {None};
+    let mut request=state.http.post(format!("{}/_matrix/client/v3/createRoom",state.config.homeserver))
+        .bearer_auth(&state.config.as_token);
+    if let Some(user)=creator {request=request.query(&[("user_id",user)]);}
+    let body=json!({
+        "preset":"private_chat",
+        "visibility":"private",
+        "room_alias_name":localpart,
+        "name":title,
+        "topic":"Managed by 2BM Matrix bridge",
+        "is_direct":direct,
+        "invite":[owner],
+        "initial_state":[{
+            "type":"com.2bm.bridge","state_key":"",
+            "content":{"account_id":account,"external_chat":chat,"network":"2bm"}
+        }]
+    });
+    let response=request.json(&body).send().await?;
+    if response.status()==StatusCode::CONFLICT {
+        let lookup=state.http.get(format!("{}/_matrix/client/v3/directory/room/{}",
+            state.config.homeserver,urlencoding::encode(&alias)))
+            .bearer_auth(&state.config.as_token).send().await?.error_for_status()?;
+        let body:Value=lookup.json().await?;
+        return body["room_id"].as_str().map(str::to_owned)
+            .ok_or_else(||anyhow::anyhow!("room alias conflict but resolution gave no room ID"));
     }
-    join_ghost(state, room, ghost).await
+    let response=response.error_for_status()?;
+    let result:Value=response.json().await?;
+    result["room_id"].as_str().map(str::to_owned)
+        .ok_or_else(||anyhow::anyhow!("Matrix createRoom returned no room ID"))
 }
-pub async fn send_as(state: &Arc<AppState>, room: &str, body: &str, txn: &str, mxid: &str) -> Result<()> {
+pub async fn ensure_ghost_in_room(state:&Arc<AppState>,room:&str,ghost:&str)->Result<()>{
+    // Most contacts are already joined (DM creators) or previously invited.
+    if join_ghost(state,room,ghost).await.is_ok() {return Ok(());}
+    let response=state.http.post(format!("{}/_matrix/client/v3/rooms/{}/invite",
+        state.config.homeserver,urlencoding::encode(room)))
+        .bearer_auth(&state.config.as_token)
+        .json(&json!({"user_id":ghost})).send().await?;
+    // An already joined/invited user may produce 4xx; attempt idempotent join.
+    if !response.status().is_success() {
+        tracing::debug!(status=%response.status(),"Matrix ghost invite not accepted");
+    }
+    join_ghost(state,room,ghost).await
+}
+pub async fn send_as(state:&Arc<AppState>,room:&str,body:&str,txn:&str,mxid:&str)->Result<()>{
     state.http.put(format!("{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
-            state.config.homeserver,urlencoding::encode(room),urlencoding::encode(txn)))
+        state.config.homeserver,urlencoding::encode(room),urlencoding::encode(txn)))
         .bearer_auth(&state.config.as_token)
         .query(&[("user_id",mxid)])
         .json(&json!({"msgtype":"m.text","body":body}))

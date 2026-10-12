@@ -48,6 +48,13 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
             UNIQUE(account_id, external_chat)
         )",
         "CREATE INDEX IF NOT EXISTS idx_mappings_room ON mappings(matrix_room)",
+        "CREATE TABLE IF NOT EXISTS virtual_chats (
+            account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            external_chat TEXT NOT NULL, title TEXT NOT NULL,
+            direct INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(account_id,external_chat)
+        )",
         "CREATE TABLE IF NOT EXISTS incoming (
             source_key TEXT PRIMARY KEY, delivered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",

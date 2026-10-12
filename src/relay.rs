@@ -14,18 +14,17 @@ pub async fn incoming(
         .filter(|a| a.enabled) else { return Ok(()); };
     let source_key = format!("{account_id}:{chat}:{message_id}");
     if db::has_key(&state.pool,"incoming","source_key",&source_key).await? { return Ok(()); }
+    let is_direct = chat.starts_with("private:") ||
+        (account.platform.starts_with("telegram") && !chat.starts_with("-"));
+    let descriptor = crate::virtual_rooms::RemoteChat::new(
+        chat, if is_direct { sender } else { chat },
+        is_direct, if is_direct { Some(sender_id.to_owned()) } else { None }
+    );
+    let mapping = crate::virtual_rooms::ensure(
+        state, &account, &descriptor, Some((sender_id,sender))
+    ).await?;
     let ghost = matrix::ghost(state,account_id,sender_id,
         &format!("{} ({})",sender,account.platform)).await?;
-    let mapping = if let Some(mapping) = db::mapping_for_chat(&state.pool,account_id,chat).await? {
-        mapping
-    } else {
-        let room = matrix::create_room(state,&account.platform,chat,&account.owner_mxid,&ghost).await?;
-        sqlx::query("INSERT OR IGNORE INTO mappings(account_id,external_chat,matrix_room) VALUES (?,?,?)")
-            .bind(account_id).bind(chat).bind(&room).execute(&state.pool).await?;
-        db::mapping_for_chat(&state.pool,account_id,chat).await?
-            .ok_or_else(|| anyhow::anyhow!("room mapping was not saved"))?
-    };
-    matrix::ensure_ghost_in_room(state,&mapping.matrix_room,&ghost).await?;
     let txn = Uuid::new_v5(&Uuid::NAMESPACE_URL,source_key.as_bytes()).to_string();
     matrix::send_as(state,&mapping.matrix_room,text,&txn,&ghost).await?;
     sqlx::query("INSERT OR IGNORE INTO incoming(source_key) VALUES (?)")
