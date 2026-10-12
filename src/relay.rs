@@ -98,6 +98,26 @@ pub async fn incoming_own(
     incoming(state,account_id,chat,message_id,sender_id,sender,text).await
 }
 
+/// A Matrix event originally sent by the real account owner cannot be
+/// redacted using the AS token with user_id=@owner (outside our namespace).
+/// Instead the room creator, owned by this AS, performs the redaction.
+fn recall_actor(
+    state:&Arc<AppState>, account:&db::Account, chat:&str, sender:&str
+)->String {
+    if sender.starts_with("@_2bm_p_") || sender==state.config.bot_user() {
+        return sender.to_owned();
+    }
+    let direct_peer=match account.platform.as_str() {
+        "qq" => chat.strip_prefix("private:"),
+        "telegram" | "telegram_user" if !chat.starts_with('-') => Some(chat),
+        _ => None,
+    };
+    match direct_peer {
+        Some(peer) => matrix::ghost_user_id(state,&account.id,peer),
+        None => state.config.bot_user(),
+    }
+}
+
 /// OneBot recall events are idempotent and may arrive before their messages.
 /// Unknown message IDs become tombstones, not errors or newly-created rooms.
 pub async fn recall(
@@ -115,7 +135,10 @@ pub async fn recall(
     if redacted!=0 { return Ok(()); }
     let txn=Uuid::new_v5(&Uuid::NAMESPACE_URL,
         format!("recall:{account_id}:{chat}:{message_id}").as_bytes()).to_string();
-    matrix::redact_as(state,&room,&event,&txn,&sender).await?;
+    let account=db::account(&state.pool,account_id).await?
+        .ok_or_else(||anyhow::anyhow!("source account no longer exists"))?;
+    let actor=recall_actor(state,&account,chat,&sender);
+    matrix::redact_as(state,&room,&event,&txn,&actor).await?;
     sqlx::query("UPDATE event_links SET redacted=1
         WHERE account_id=? AND external_chat=? AND external_message=?")
         .bind(account_id).bind(chat).bind(message_id)
@@ -357,6 +380,40 @@ mod tests {
         server.abort();
         drop(state);
         let _=std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn recalls_of_matrix_owner_messages_use_privileged_bridge_identity() {
+        let dbfile=std::path::PathBuf::new();
+        let _=dbfile; // no DB needed: actor lookup is pure
+        let mut account=db::Account{
+            id:"acct".to_owned(),platform:"qq".to_owned(),label:"test".to_owned(),
+            owner_mxid:"@owner:example.org".to_owned(),
+            credentials:String::new(),enabled:true,
+        };
+        // Full integration with actual ghost permissions is covered by Synapse.
+        let state=Arc::new(AppState{
+            config:crate::config::Config {
+                admin_listen:"127.0.0.1:9000".parse().unwrap(),
+                matrix_listen:"127.0.0.1:9001".parse().unwrap(),combined_listen:None,
+                database_url:String::new(),homeserver:String::new(),
+                server_name:"example.org".to_owned(),as_token:String::new(),
+                hs_token:String::new(),admin_token:String::new(),credential_key:[0;32],
+            },
+            pool:sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap(),
+            http:reqwest::Client::new(),
+            telegram:crate::telegram_user::Gateway::default(),
+            room_creation:tokio::sync::Mutex::new(()),
+            delivery_lock:tokio::sync::Mutex::new(()),
+            transaction_lock:tokio::sync::Mutex::new(()),
+        });
+        let dm=recall_actor(&state,&account,"private:123","@owner:example.org");
+        assert_eq!(dm,matrix::ghost_user_id(&state,"acct","123"));
+        assert_eq!(recall_actor(&state,&account,"group:42","@owner:example.org"),
+            state.config.bot_user());
+        account.platform="telegram_user".to_string();
+        assert_eq!(recall_actor(&state,&account,"123","@owner:example.org"),
+            matrix::ghost_user_id(&state,"acct","123"));
     }
 
     #[test]
