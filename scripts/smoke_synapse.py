@@ -284,6 +284,19 @@ def main():
             for e in messages(owner,second_room))
         queue_view=api("GET",ADMIN,"/api/admin/qq-inbox",token=admin)
         assert "Must not bridge into genuinely encrypted room" not in json.dumps(queue_view)
+        entry=next(item for item in queue_view["entries"]
+            if item["source_key"].endswith(":9011"))
+        previous_attempts=entry["attempts"]
+        # Operator retry must be safe to request, while live E2EE protection
+        # still prevents sending plaintext to the genuinely encrypted room.
+        api("POST",ADMIN,"/api/admin/queues/retry",{
+            "account_id":second,"source_key":entry["source_key"],
+            "kind":entry["queue_kind"]
+        },admin)
+        until(lambda:any(item["source_key"]==entry["source_key"] and
+            item["attempts"]>previous_attempts
+            for item in api("GET",ADMIN,"/api/admin/qq-inbox",
+                token=admin)["entries"]),"manual queue retry retained under E2EE")
         # Account deletion must fail rather than cascading away a queued
         # message that could not safely be delivered.
         try:
