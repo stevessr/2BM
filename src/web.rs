@@ -21,6 +21,7 @@ pub fn admin_router() -> Router<Arc<AppState>> {
         .route("/", get(admin_page))
         .route("/admin", get(admin_page))
         .route("/api/admin/accounts", get(list_accounts).post(create_account))
+        .route("/api/admin/adapter-status",get(list_adapter_status))
         .route("/api/admin/accounts/{id}", delete(delete_account))
         .route("/api/admin/accounts/{id}/telegram/start", post(telegram_start))
         .route("/api/admin/accounts/{id}/telegram/verify", post(telegram_verify))
@@ -118,6 +119,24 @@ async fn resolve_delivery_issue(
         .await.map_err(internal)?;
     if !found {return Err(error(StatusCode::NOT_FOUND,"unresolved delivery not found"));}
     Ok(Json(json!({"status":"resolved","action":request.action})))
+}
+
+
+#[derive(serde::Serialize,sqlx::FromRow)]
+struct AdapterStatus {
+    account_id:String,
+    state:String,
+    updated_at:String,
+}
+async fn list_adapter_status(
+    State(state):State<Arc<AppState>>,headers:HeaderMap
+)->ApiResult<Json<Value>> {
+    admin_check(&headers,&state)?;
+    let statuses:Vec<AdapterStatus>=sqlx::query_as(
+        "SELECT account_id,state,updated_at FROM adapter_status
+         ORDER BY account_id"
+    ).fetch_all(&state.pool).await.map_err(internal)?;
+    Ok(Json(json!(statuses)))
 }
 
 async fn list_accounts(

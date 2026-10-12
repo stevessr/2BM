@@ -41,6 +41,11 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
             id TEXT PRIMARY KEY, platform TEXT NOT NULL, label TEXT NOT NULL,
             owner_mxid TEXT NOT NULL DEFAULT '', credentials TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1
         )",
+        "CREATE TABLE IF NOT EXISTS adapter_status (
+            account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+            state TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
         "CREATE TABLE IF NOT EXISTS mappings (
             id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL
             REFERENCES accounts(id) ON DELETE CASCADE,

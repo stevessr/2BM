@@ -64,6 +64,9 @@ pub async fn gateway(state: &Arc<AppState>, account_id: &str, credentials: &Valu
                             }
                             Some(11) => { acknowledged = true; }
                             Some(7) | Some(9) => bail!("Discord requested reconnect"),
+                            Some(0) if event["t"] == "READY" => {
+                                let _=crate::workers::set_status(state,account_id,"online").await;
+                            }
                             Some(0) if event["t"] == "MESSAGE_CREATE" => {
                                 let data = &event["d"];
                                 if data["author"]["bot"] == true { continue; }

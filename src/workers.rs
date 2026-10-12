@@ -3,6 +3,14 @@ use std::{collections::{HashMap, HashSet}, sync::Arc, time::Duration};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
+pub async fn set_status(state:&Arc<AppState>, account_id:&str, status:&str)
+    ->anyhow::Result<()> {
+    sqlx::query("INSERT INTO adapter_status(account_id,state) VALUES (?,?)
+        ON CONFLICT(account_id) DO UPDATE SET state=excluded.state,
+        updated_at=CURRENT_TIMESTAMP")
+        .bind(account_id).bind(status).execute(&state.pool).await?;
+    Ok(())
+}
 pub async fn run(state: Arc<AppState>) {
     let mut jobs: HashMap<String, (String, JoinHandle<()>)> = HashMap::new();
     loop {
@@ -20,6 +28,9 @@ pub async fn run(state: Arc<AppState>) {
                 for id in stale {
                     if let Some((_, task)) = jobs.remove(&id) { task.abort(); }
                     state.telegram.live.write().await.remove(&id);
+                    if let Err(error)=set_status(&state,&id,"stopped").await {
+                        warn!(account=%id,%error,"unable to update adapter state");
+                    }
                 }
                 for account in accounts {
                     if !active.contains_key(&account.id) || jobs.contains_key(&account.id) { continue; }
@@ -28,6 +39,7 @@ pub async fn run(state: Arc<AppState>) {
                         Err(error) => { warn!(account = %account.id, %error, "invalid credentials"); continue; }
                     };
                     info!(platform = %account.platform, account = %account.id, "starting adapter");
+                    let _=set_status(&state,&account.id,"connecting").await;
                     let signature = active[&account.id].clone();
                     let id = account.id.clone();
                     let service = state.clone();
@@ -49,8 +61,18 @@ pub async fn run(state: Arc<AppState>) {
                                 },
                                 _ => break,
                             };
-                            if let Err(error) = result {
-                                warn!(platform = %account.platform, account = %id, %error, "adapter disconnected");
+                            match result {
+                                Ok(())=>{
+                                    let _=set_status(&service,&id,"online").await;
+                                }
+                                Err(_error)=>{
+                                    // Some APIs embed their tokens in URL path components.
+                                    // Do not leak reqwest errors (including Telegram Bot
+                                    // endpoint credentials) to untrusted action logs.
+                                    let _=set_status(&service,&id,"error").await;
+                                    warn!(platform = %account.platform, account = %id,
+                                        "adapter disconnected; check credentials and network");
+                                }
                             }
                             tokio::time::sleep(Duration::from_secs(8)).await;
                         }

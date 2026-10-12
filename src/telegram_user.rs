@@ -293,6 +293,7 @@ pub async fn run(state: &Arc<AppState>, account_id: &str, credentials: &Value) -
     let mut dialogs = client.iter_dialogs();
     while let Some(_) = dialogs.next().await? {}
     state.telegram.live.write().await.insert(account_id.into(), client.clone());
+    let _=crate::workers::set_status(state,account_id,"online").await;
     // Existing chats become Matrix rooms even before the next external message.
     // Run asynchronously so update processing is not blocked by Matrix requests.
     let service = state.clone();

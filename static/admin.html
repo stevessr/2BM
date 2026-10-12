@@ -141,6 +141,7 @@
   }
   async function refresh() {
     accounts = await api('accounts');
+    const adapterStatus = await api('adapter-status');
     const mappings = await api('mappings');
     const virtualRooms = await api('virtual-rooms');
     const deliveryIssues = await api('delivery-issues');
@@ -165,7 +166,10 @@
         tgOption.textContent += account.enabled ? ' · 已验证' : ' · 待验证';
         $('tgAccount').append(tgOption);
       }
-      addRow($('accounts'), account.label + ' · ' + account.platform + ' · ' + account.owner_mxid + ' · ' + account.id,
+      const activity = adapterStatus.find(s => s.account_id === account.id);
+      addRow($('accounts'), account.label + ' · ' + account.platform +
+        ' · ' + (activity?.state || '未连接') + ' · ' +
+        account.owner_mxid + ' · ' + account.id,
         () => remove('accounts/', account.id));
     }
     $('virtualRooms').replaceChildren();
