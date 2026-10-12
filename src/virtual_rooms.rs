@@ -176,6 +176,7 @@ mod tests {
             creates: AtomicUsize,
             expected_alias: String,
             poisoned: AtomicBool,
+            forged_sender:AtomicBool,
         }
         async fn create(
             State(mock):State<Arc<Mock>>, Json(body):Json<Value>
@@ -189,7 +190,9 @@ mod tests {
         async fn bridge_state(State(mock):State<Arc<Mock>>)->Json<Value> {
             Json(json!([
                 {"type":"m.room.create","state_key":"",
-                 "sender":"@_2bm:example.org",
+                 "sender":if mock.forged_sender.load(Ordering::SeqCst) {
+                    "@other:example.org"
+                 } else {"@_2bm:example.org"},
                  "content":{"room_version":"10"}},
                 {"type":"com.2bm.bridge","state_key":"",
                  "sender":"@_2bm:example.org",
@@ -207,6 +210,7 @@ mod tests {
             creates:AtomicUsize::new(0),
             expected_alias:alias("test-account","group:987"),
             poisoned:AtomicBool::new(false),
+            forged_sender:AtomicBool::new(false),
         });
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let hs=format!("http://{}",listener.local_addr().unwrap());
@@ -268,6 +272,17 @@ mod tests {
         mock.poisoned.store(true,Ordering::SeqCst);
         let collision=ensure(&state,&account,&chat,None).await;
         assert!(collision.is_err(),"a foreign Matrix alias was adopted");
+        let count:i64=sqlx::query_scalar(
+            "SELECT COUNT(*) FROM mappings WHERE account_id='test-account'")
+            .fetch_one(&state.pool).await.unwrap();
+        assert_eq!(count,0);
+
+        // Even if a foreign creator copies all bridge state CONTENT exactly,
+        // the signed event sender does not match the 2BM AS namespace.
+        mock.poisoned.store(false,Ordering::SeqCst);
+        mock.forged_sender.store(true,Ordering::SeqCst);
+        let forged=ensure(&state,&account,&chat,None).await;
+        assert!(forged.is_err(),"trusted-looking state from a foreign creator accepted");
         let count:i64=sqlx::query_scalar(
             "SELECT COUNT(*) FROM mappings WHERE account_id='test-account'")
             .fetch_one(&state.pool).await.unwrap();
