@@ -1,7 +1,8 @@
 use anyhow::Result;
 use serde::Serialize;
-use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, FromRow, SqlitePool};
-use std::str::FromStr;
+use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions,
+    SqliteJournalMode, SqliteSynchronous}, FromRow, SqlitePool};
+use std::{str::FromStr, time::Duration};
 
 #[derive(Debug, Clone, FromRow)]
 pub struct Account {
@@ -31,12 +32,18 @@ pub struct Mapping {
 }
 
 pub async fn connect(database_url: &str) -> Result<SqlitePool> {
+    // Per-connection WAL and FULL synchronous are required for our
+    // acknowledged QQ webhook inbox and outbound delivery journal.
     let options = SqliteConnectOptions::from_str(database_url)?
         .create_if_missing(true)
-        .foreign_keys(true);
+        .foreign_keys(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Full)
+        .busy_timeout(Duration::from_secs(10));
     let db = SqlitePoolOptions::new().max_connections(5).connect_with(options).await?;
     for statement in [
-        "PRAGMA journal_mode=WAL",
+        "PRAGMA wal_autocheckpoint=1000",
+        "PRAGMA journal_size_limit=67108864",
         "CREATE TABLE IF NOT EXISTS accounts (
             id TEXT PRIMARY KEY, platform TEXT NOT NULL, label TEXT NOT NULL,
             owner_mxid TEXT NOT NULL DEFAULT '', credentials TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1
@@ -193,4 +200,31 @@ pub async fn has_key(db: &SqlitePool, table: &str, field: &str, key: &str) -> Re
         _ => anyhow::bail!("invalid deduplication table"),
     };
     Ok(sqlx::query_scalar::<_, i64>(sql).bind(key).fetch_optional(db).await?.is_some())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn every_sqlite_connection_uses_durable_full_sync(){
+        let path=std::env::temp_dir().join(format!(
+            "2bm-db-durable-{}.sqlite",uuid::Uuid::new_v4()));
+        let pool=connect(&format!("sqlite://{}",path.display())).await.unwrap();
+        let mut connections=Vec::new();
+        for _ in 0..5{
+            let conn=pool.acquire().await.unwrap();
+            connections.push(conn);
+        }
+        for mut conn in connections {
+            let level:i64=sqlx::query_scalar("PRAGMA synchronous")
+                .fetch_one(&mut *conn).await.unwrap();
+            assert_eq!(level,2,"FULL synchronous must apply per connection");
+            let fks:i64=sqlx::query_scalar("PRAGMA foreign_keys")
+                .fetch_one(&mut *conn).await.unwrap();
+            assert_eq!(fks,1);
+        }
+        pool.close().await;
+        let _=std::fs::remove_file(path);
+    }
 }
