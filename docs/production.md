@@ -126,3 +126,34 @@ successfully bridged while quarantined.
 The Synapse integration suite now includes AS event replay under distinct
 transaction IDs, source recall of Matrix-originated messages, self-first QQ
 DM identity, and encryption quarantine. It remains a OneBot stub, not real QQ.
+
+## Durable callback semantics and queue alarms
+
+The bridge now **ACKs QQ message/notice webhooks only after inserting an encrypted
+SQLite record**. The webhook return code no longer tells NapCat that Matrix
+delivery succeeded: the message may remain queued due to rate limits, Matrix
+outage or unsupported encryption. Monitor `/api/admin/qq-inbox` and
+`/api/admin/telegram-inbox`, including `pending`, `attempts` and
+`next_attempt_at`. Do not expose these APIs without admin authentication.
+
+QQ `message`, `message_sent`, `group_recall`, `friend_recall`,
+`group_increase`, and `group_decrease` notifications are retained before
+ACK; other OneBot notice types are currently ignored by design. Repeated
+message/recall callbacks use stable identifiers; membership notices lack a
+reliable unique upstream ID and may be applied repeatedly, with idempotent
+join/leave semantics.
+
+The Telegram human-account update loop persists each supported `NewMessage`
+into an encrypted SQLite inbox, independent from the actual Matrix send.
+Disk errors abort update processing rather than silently advancing past an
+unaccepted callback. A disabled account must not cause queued messages to be
+mistaken for delivered ones. Check both queues and the separate outbound
+uncertain-delivery journal before removing an external account.
+
+Backoff grows as 5, 20, 45, ... seconds and is capped at 3600 seconds per
+message. A recovered external connection or Matrix homeserver does **not**
+guarantee immediate delivery of an older backlogged event. Provision disk
+space for the worst planned outage; queued content is encrypted in SQLite
+but metadata, logs, memory and filesystem backups still require protection.
+`synchronous=FULL` assumes real filesystem fsync durability. Do not use
+unsafe network or ephemeral filesystems for authoritative DB storage.

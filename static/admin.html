@@ -104,8 +104,8 @@
       <div id="telegramInbox"></div>
     </section>
     <section class="panel">
-      <h2>QQ 跨设备消息持久化队列</h2>
-      <p class="muted">QQ 自身消息在收到 Webhook 时先加密保存至 SQLite，由后台投递。下方只展示消息 ID 和重试元信息，不展示聊天正文。</p>
+      <h2>QQ 消息与通知持久化队列</h2>
+      <p class="muted">QQ 私聊、群聊、撤回、群成员变更及跨设备自身消息均在 Webhook 返回成功前加密保存，由后台可靠投递。下方仅展示消息 ID 与重试状态，不展示正文。</p>
       <div id="qqInbox"></div>
     </section>
     <section class="panel">

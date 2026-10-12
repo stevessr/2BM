@@ -149,3 +149,11 @@ Rust CI runs `cargo check --all-targets`, `cargo test --all-targets`, and `cargo
 - **Tests:** Rust CI checks schema/inbox/actor properties. A real Synapse integration job validates virtual-room identities, native replies, callback retransmission, source recalls, appservice event replay, own-message echoes and encrypted-room plaintext quarantine.
 
 **Remaining production blockers:** real NapCat and Telegram human-account interoperability, 24h soak, fault injection around remote delivery ambiguity, secure backup/restore acceptance, attachment/E2EE support if required.
+
+## Durable QQ/Telegram ingestion
+
+Recent hardening expands the crash-resilient SQLite inbox to cover **all inbound OneBot events**, not only messages sent from another QQ device. Authenticated QQ message, recall and group-membership webhooks are XChaCha20-Poly1305 encrypted and saved to `qq_events_inbox` before returning HTTP 200. The independent worker retries failures with capped backoff. A successful webhook HTTP response therefore means **durably accepted**, not that Matrix delivery has already completed. Administrators can inspect pending counts/retries via `GET /api/admin/qq-inbox`.
+
+Telegram **human-account MTProto** updates are also encrypted into `telegram_events_inbox` before progressing the update loop. A separate delivery path replays failures after restart and deduplicates per `(account, dialog, message_id)`. `GET /api/admin/telegram-inbox` and the WebUI expose queue metadata without text. Errors while persisting Telegram updates stop stream consumption; updates not durably accepted must not be intentionally marked processed. Bot-mode Telegram polling continues to use its existing persisted offset.
+
+The outgoing Matrix→remote delivery journal remains separate, because QQ/Telegram remote sends have no universal caller-controlled idempotency token. Ambiguous remote sending requires operator reconciliation, not blind retry.
