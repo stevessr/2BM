@@ -119,7 +119,7 @@ pub async fn sync(
 ) -> Result<SyncReport> {
     let conversations = match account.platform.as_str() {
         "qq" => crate::adapters::qq::list_chats(state, account).await?,
-        "telegram_user" => crate::telegram_user::list_chats(state, &account.id).await?,
+        "telegram_user" => crate::telegram_user::list_chats(state, &account.id,limit).await?,
         _ => anyhow::bail!("only QQ and Telegram human-account modes support chat discovery"),
     };
     let discovered = conversations.len();

@@ -192,23 +192,37 @@ pub async fn send_with_id(state: &Arc<AppState>, account_id: &str, chat: &str, t
     Ok(message.id())
 }
 
-pub async fn list_chats(state: &Arc<AppState>, account_id: &str) -> Result<Vec<RemoteChat>> {
+pub async fn list_chats(
+    state: &Arc<AppState>, account_id: &str, desired_new: usize
+) -> Result<Vec<RemoteChat>> {
     let client = state.telegram.live.read().await.get(account_id)
         .cloned().context("Telegram user session is not online")?;
+    // Do not silently exclude every dialog beyond the first 200. Fetch until
+    // a fresh batch of unmapped dialogs has been found, while skipping those
+    // already provisioned. Avoid one DB read per dialog.
+    let mapped:Vec<String>=sqlx::query_scalar(
+        "SELECT external_chat FROM mappings WHERE account_id=?")
+        .bind(account_id).fetch_all(&state.pool).await?;
+    let existing:std::collections::HashSet<String>=mapped.into_iter().collect();
     let mut iter = client.iter_dialogs();
     let mut chats = Vec::new();
-    // Bound expensive Matrix provisioning and MTProto iteration for each sync.
-    while chats.len() < 200 {
+    let mut new_count=0usize;
+    // Defensive ceiling only for pathological accounts, not the usual
+    // 1-100 room provisioning batch. Repeat sync to cover all conversations.
+    while chats.len() < 10_000 {
         let Some(dialog) = iter.next().await? else { break; };
         let peer = dialog.peer();
         let id = peer.id();
         let Some(chat_id) = id.bot_api_dialog_id() else { continue; };
         let direct = id.kind() == PeerKind::User;
         let title = peer.name().unwrap_or("Telegram chat").to_owned();
+        let chat_key=chat_id.to_string();
+        if !existing.contains(&chat_key) {new_count+=1;}
         chats.push(RemoteChat::new(
-            chat_id.to_string(), title, direct,
+            chat_key, title, direct,
             if direct { Some(chat_id.to_string()) } else { None }
         ));
+        if new_count >= desired_new.clamp(1,100) {break;}
     }
     Ok(chats)
 }
