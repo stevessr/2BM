@@ -1,6 +1,10 @@
 FROM rust:1-bookworm AS builder
+# SQLx links system sqlite3 while Grammers/libsql bundles its own engine.
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /work
 COPY Cargo.toml Cargo.toml
+COPY .cargo .cargo
 COPY src src
 COPY static static
 RUN cargo build --release

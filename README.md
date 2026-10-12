@@ -89,3 +89,7 @@ cargo fmt --all
 Main modules: `src/adapters` for platforms, `src/matrix.rs` for Matrix Client API calls, `src/relay.rs` for routing, `src/web.rs` for WebUI/API, and `src/workers.rs` for background adapters.
 
 MIT licensed. See `LICENSE`.
+
+
+### Build prerequisites
+Install `pkg-config` and `libsqlite3-dev` on Debian/Ubuntu. SQLx dynamically links to the system SQLite shared object via `.cargo/config.toml`, while Telegram Grammers uses libsql's bundled SQLite; this avoids duplicate `sqlite3_*` symbols at link time.
