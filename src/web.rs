@@ -595,16 +595,11 @@ async fn qq_hook(
     let sender_id = body["user_id"].as_i64()
         .map(|n| n.to_string()).unwrap_or_default();
     if sender_id.is_empty() { return Err(error(StatusCode::BAD_REQUEST,"missing QQ sender")); }
-    let sender = body["sender"]["card"].as_str()
-        .filter(|s| !s.is_empty())
-        .or_else(|| body["sender"]["nickname"].as_str())
-        .unwrap_or("QQ user");
-    let text=adapters::qq::message_text(&body);
-    let reply_to=adapters::qq::reply_target(&body);
     if own {
         // Commit the authenticated webhook to encrypted SQLite before ACK.
         // A separate worker reconciles it against Matrix after in-flight
         // outbound requests finish, even when the process restarts.
+        let text=adapters::qq::message_text(&body);
         crate::inbox::enqueue_qq_own(&state,&account_id,&chat,&message_id,&text)
             .await.map_err(internal)?;
     } else {

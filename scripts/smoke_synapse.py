@@ -220,13 +220,13 @@ def main():
                 "sender":"@owner:smoke.test",
                 "content":{"algorithm":"m.megolm.v1.aes-sha2"}
             }]},as_auth)
-        try:
-            api("POST",AS,hook,{**msg,"message_id":458,
-                "raw_message":"Sensitive plaintext must not leak"}, "local-hook")
-        except AssertionError as failure:
-            assert ": 500 " in str(failure),failure
-        else:
-            raise AssertionError("bridge accepted plaintext after encryption marker")
+        api("POST",AS,hook,{**msg,"message_id":458,
+            "raw_message":"Sensitive plaintext must not leak"}, "local-hook")
+        # A queued-and-ACKed webhook is safer than assuming NapCat will retry
+        # its HTTP POST. Failure must be visible in the durable queue.
+        until(lambda:any(item["source_key"].endswith(":458") and item["attempts"]>0
+            for item in api("GET",ADMIN,"/api/admin/qq-inbox",
+                token=admin)["entries"]),"encrypted room callback retained")
         assert not any(e["content"].get("body")=="Sensitive plaintext must not leak"
             for e in messages(owner,room) if e["type"]=="m.room.message")
 
@@ -248,17 +248,15 @@ def main():
         with sqlite3.connect(database_path,timeout=10) as database:
             database.execute("DELETE FROM room_warnings WHERE matrix_room=?",
                 (second_room,))
-        try:
-            api("POST",AS,second_hook,{
-                "post_type":"message","message_type":"private","self_id":999,
-                "user_id":123,"message_id":9011,
-                "raw_message":"Must not bridge into genuinely encrypted room",
-                "sender":{"nickname":"Alice"}
-            },"local-hook")
-        except AssertionError as failure:
-            assert ": 500 " in str(failure),failure
-        else:
-            raise AssertionError("live encryption-state probe was bypassed")
+        api("POST",AS,second_hook,{
+            "post_type":"message","message_type":"private","self_id":999,
+            "user_id":123,"message_id":9011,
+            "raw_message":"Must not bridge into genuinely encrypted room",
+            "sender":{"nickname":"Alice"}
+        },"local-hook")
+        until(lambda:any(item["source_key"].endswith(":9011") and item["attempts"]>0
+            for item in api("GET",ADMIN,"/api/admin/qq-inbox",
+                token=admin)["entries"]),"real encrypted room callback retained")
         assert not any(e["type"]=="m.room.message" and e["content"].get("body")==
             "Must not bridge into genuinely encrypted room"
             for e in messages(owner,second_room))
