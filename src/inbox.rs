@@ -22,7 +22,8 @@ pub async fn enqueue_qq_own(
 pub async fn drain_qq_own(state:&Arc<AppState>,limit:i64)->Result<usize>{
     let items:Vec<(String,String,String)>=sqlx::query_as(
         "SELECT source_key,account_id,sealed FROM qq_own_inbox
-         ORDER BY received_at,source_key LIMIT ?")
+         WHERE next_attempt_at <= CURRENT_TIMESTAMP
+         ORDER BY next_attempt_at,received_at,source_key LIMIT ?")
         .bind(limit.clamp(1,100)).fetch_all(&state.pool).await?;
     let mut success=0;
     for (key,account,sealed) in items {
@@ -48,17 +49,27 @@ pub async fn drain_qq_own(state:&Arc<AppState>,limit:i64)->Result<usize>{
             },
             Err(err)=>{
                 sqlx::query("UPDATE qq_own_inbox SET attempts=attempts+1,
+                    next_attempt_at=datetime('now',
+                        '+' || MIN(3600,(attempts+1)*(attempts+1)*5) || ' seconds'),
                     last_error='delivery temporarily unavailable' WHERE source_key=?")
                     .bind(&key).execute(&state.pool).await?;
                 tracing::warn!(account=%account,%err,
-                    "queued QQ webhook could not be delivered; retained for retry");
-                // Backoff: stop at the first failure to avoid costly repeated
-                // Matrix calls on every event in a disconnected account.
-                break;
+                    "queued QQ webhook could not be delivered; retry scheduled");
+                // A failed account must not starve other accounts in the inbox.
             }
         }
     }
     Ok(success)
+}
+
+/// Process encrypted QQ callbacks independently from account discovery.
+pub async fn run_worker(state:Arc<AppState>){
+    loop {
+        if let Err(error)=drain_qq_own(&state,100).await {
+            tracing::warn!(%error,"QQ inbox drain failed");
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
 }
 
 pub async fn queued_count(state:&Arc<AppState>)->Result<i64>{
@@ -102,6 +113,17 @@ mod tests {
         assert!(!payload.contains("top secret"));
         let decoded=crypto::decrypt(&state.config.credential_key,&payload).unwrap();
         assert_eq!(decoded["text"],"top secret");
+        // A corrupt record must remain for recovery, with a future retry
+        // deadline so it doesn't create an uncontrolled hot loop.
+        sqlx::query("UPDATE qq_own_inbox SET sealed='corrupted' WHERE account_id='qq'")
+            .execute(&state.pool).await.unwrap();
+        assert_eq!(drain_qq_own(&state,10).await.unwrap(),0);
+        let delayed:i64=sqlx::query_scalar(
+            "SELECT COUNT(*) FROM qq_own_inbox
+             WHERE next_attempt_at > CURRENT_TIMESTAMP AND attempts=1")
+            .fetch_one(&state.pool).await.unwrap();
+        assert_eq!(delayed,1);
+        assert_eq!(drain_qq_own(&state,10).await.unwrap(),0);
         state.pool.close().await;
         drop(state);
         let _=std::fs::remove_file(path);

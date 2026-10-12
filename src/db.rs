@@ -129,6 +129,7 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
             sealed TEXT NOT NULL,
             attempts INTEGER NOT NULL DEFAULT 0,
             received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            next_attempt_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             last_error TEXT
         )",
         "CREATE INDEX IF NOT EXISTS idx_qq_own_inbox_received
@@ -143,6 +144,17 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
     ] {
         sqlx::query(statement).execute(&db).await?;
     }
+    // Allow upgrading a beta database that created the encrypted inbox
+    // before per-message backoff was introduced.
+    use sqlx::Row;
+    let cols=sqlx::query("PRAGMA table_info('qq_own_inbox')")
+        .fetch_all(&db).await?;
+    if !cols.iter().any(|row|row.get::<String,_>("name")=="next_attempt_at") {
+        sqlx::query("ALTER TABLE qq_own_inbox ADD COLUMN next_attempt_at
+            TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP").execute(&db).await?;
+    }
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_qq_own_inbox_next
+        ON qq_own_inbox(next_attempt_at,received_at)").execute(&db).await?;
     Ok(db)
 }
 

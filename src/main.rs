@@ -55,6 +55,7 @@ async fn main() -> Result<()> {
     // is correct (container restart policy retries after transient outages).
     matrix::register_bot(&state).await?;
     tokio::spawn(workers::run(state.clone()));
+    tokio::spawn(inbox::run_worker(state.clone()));
 
     let config = &state.config;
     if let Some(listen) = config.combined_listen.or_else(|| {
