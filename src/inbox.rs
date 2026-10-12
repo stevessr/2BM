@@ -228,6 +228,32 @@ mod tests {
         assert_eq!(drain_qq_own(&state,10).await.unwrap(),0);
         assert_eq!(queued_count(&state).await.unwrap(),1);
 
+        // Incoming (non-self) messages are also protected by an encrypted,
+        // crash-resilient queue and duplicate OneBot callbacks are harmless.
+        let normal=json!({"post_type":"message","message_type":"private",
+            "user_id":123,"message_id":77,
+            "raw_message":"private inbound event",
+            "sender":{"nickname":"Contact"}});
+        enqueue_qq_event(&state,"qq","qq:message:private:123:77",&normal)
+            .await.unwrap();
+        enqueue_qq_event(&state,"qq","qq:message:private:123:77",&normal)
+            .await.unwrap();
+        let (sealed,count):(String,i64)=sqlx::query_as(
+            "SELECT sealed,(SELECT COUNT(*) FROM qq_events_inbox)
+             FROM qq_events_inbox LIMIT 1")
+            .fetch_one(&state.pool).await.unwrap();
+        assert_eq!(count,1);
+        assert!(!sealed.contains("private inbound event"));
+        assert_eq!(crypto::decrypt(&state.config.credential_key,&sealed)
+            .unwrap()["raw_message"],"private inbound event");
+        // A disabled account is deliberately not processed as success.
+        assert_eq!(drain_qq_events(&state,20).await.unwrap(),0);
+        assert_eq!(queued_count(&state).await.unwrap(),2);
+        let retries:i64=sqlx::query_scalar(
+            "SELECT attempts FROM qq_events_inbox LIMIT 1")
+            .fetch_one(&state.pool).await.unwrap();
+        assert_eq!(retries,1);
+
         state.pool.close().await;
         drop(state);
         let _=std::fs::remove_file(path);
