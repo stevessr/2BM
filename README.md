@@ -166,3 +166,9 @@ The outgoing Matrix→remote delivery journal remains separate, because QQ/Teleg
 - **Independent consumers:** self-QQ messages, ordinary QQ callbacks and Telegram updates are processed independently; each attempted delivery has a 20-second upper bound and exponential-like backoff capped at one hour. This prevents a long outage in one source from freezing the other sources.
 - **Telegram dialog coverage:** discovery no longer stalls at a fixed first 200 dialogs. Each pass scans previously mapped dialogs and continues until the requested batch of previously unseen dialogs is found (defensive ceiling 10,000 scanned dialogs per pass); existing names can be refreshed.
 - **Recovery tests:** mocked Matrix tests prove Telegram encrypted-inbox delivery and replay deduplication. Real Synapse + stubbed OneBot integration tests prove encrypted QQ callback retry after temporary quarantine without a second webhook request.
+
+## Queue retry and safe account removal
+
+The admin WebUI now offers **立即重试** for individual encrypted QQ and Telegram inbound queue entries, backed by `POST /api/admin/queues/retry` with `account_id`, `source_key`, and the table-kind allowlist (`qq_own`, `qq_events`, or `telegram_events`). This only schedules another inbox attempt; it does **not** bypass encryption, authorization or Matrix membership checks. It is separate from the outbound **uncertain send** recovery action, where a blind retry could duplicate an external message.
+
+Account deletion now returns HTTP 409 if any encrypted inbound callback is queued or an outbound attempt is unresolved. This prevents `ON DELETE CASCADE` from silently destroying pending messages, but also means an offline/logged-out account may require operator intervention before removal. Never delete database rows manually without exporting and examining the undelivered records.

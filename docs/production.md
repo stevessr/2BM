@@ -189,3 +189,26 @@ The Rust integration suite now mocks a Homeserver to exercise real encrypted
 Telegram queue delivery and repeat-update suppression. It still does not
 connect to Telegram MTProto in live mode, and the QQ integration uses a local
 OneBot stub rather than a real NapCat installation.
+
+## Administrator queue reconciliation
+
+Authenticated `POST /api/admin/queues/retry` accepts:
+`{"account_id":"<account UUID>","source_key":"<exact inbox key>",
+"kind":"qq_events"}`. The queue kind must be `qq_own`, `qq_events`,
+or `telegram_events`. The WebUI exposes this as **立即重试** next to
+each queued message. It does not directly submit a message to the remote
+source and does not override E2EE or account-disable safeguards.
+
+Account deletion will be **refused (409)** until the account's QQ/Telegram
+inbox queues and unresolved Matrix-to-external sends are reconciled. This
+avoids SQLite foreign-key cascades losing undelivered data. Log out and
+revoke Telegram remote sessions separately; deleting a local database row
+alone cannot revoke upstream authorization. If pending records are stuck
+because the account is no longer active, back them up and establish an
+explicit data-retention/discard policy before destructive action.
+
+Each QQ self-message, ordinary QQ callback, and Telegram inbound consumer
+runs independently, with up to 20 selected events per iteration and a
+20-second timeout per attempt. Rate limits and backlog handling are
+deliberately conservative; realistic production traffic and long outages
+still require load testing against the actual VPS.
