@@ -24,6 +24,7 @@ pub fn admin_router() -> Router<Arc<AppState>> {
         .route("/api/admin/accounts/{id}", delete(delete_account))
         .route("/api/admin/accounts/{id}/telegram/start", post(telegram_start))
         .route("/api/admin/accounts/{id}/telegram/verify", post(telegram_verify))
+        .route("/api/admin/accounts/{id}/telegram/logout", post(telegram_logout))
         .route("/api/admin/accounts/{id}/telegram/history", post(telegram_history))
         .route("/api/admin/accounts/{id}/sync", post(sync_virtual_rooms))
         .route("/api/admin/virtual-rooms", get(list_virtual_rooms))
@@ -241,10 +242,28 @@ async fn telegram_history(
     Ok(Json(json!(report)))
 }
 
+async fn telegram_logout(
+    State(state):State<Arc<AppState>>,headers:HeaderMap,Path(id):Path<String>
+)->ApiResult<Json<Value>> {
+    admin_check(&headers,&state)?;
+    crate::telegram_user::logout(&state,&id).await
+        .map_err(|err|error(StatusCode::CONFLICT,&err.to_string()))?;
+    Ok(Json(json!({"status":"logged_out","remote_authorization":"revoked"})))
+}
+
 async fn delete_account(
     State(state): State<Arc<AppState>>, headers: HeaderMap, Path(id): Path<String>
 ) -> ApiResult<StatusCode> {
     admin_check(&headers, &state)?;
+    let account=db::account(&state.pool,&id).await.map_err(internal)?
+        .ok_or_else(||error(StatusCode::NOT_FOUND,"account not found"))?;
+    if account.platform=="telegram_user" {
+        if account.enabled {
+            return Err(error(StatusCode::CONFLICT,
+                "revoke Telegram authorization in WebUI before deleting this account"));
+        }
+        crate::telegram_user::purge_local_session(&state,&id).await.map_err(internal)?;
+    }
     let outcome = sqlx::query("DELETE FROM accounts WHERE id = ?")
         .bind(id).execute(&state.pool).await.map_err(internal)?;
     if outcome.rows_affected() == 0 { return Err(error(StatusCode::NOT_FOUND, "account not found")); }
