@@ -96,6 +96,12 @@ pub async fn ensure(
             state,&mapping.matrix_room,&title,actor.as_deref()).await {
             tracing::warn!(room=%mapping.matrix_room,%error,
                 "unable to synchronize virtual room display name");
+            // Keep the previous title in SQLite so the next sync will retry.
+            if let Some(previous)=old_title.as_deref() {
+                sqlx::query("UPDATE virtual_chats SET title=? WHERE account_id=? AND external_chat=?")
+                    .bind(previous).bind(&account.id).bind(&chat.external_chat)
+                    .execute(&state.pool).await?;
+            }
         }
     }
     Ok(mapping)
@@ -118,6 +124,17 @@ pub async fn sync(
         if db::mapping_for_chat(&state.pool,&account.id,&chat.external_chat)
             .await?.is_some() {
             report.already_present += 1;
+            let desired: String=chat.title.trim().chars().take(160).collect();
+            let current:Option<String>=sqlx::query_scalar(
+                "SELECT title FROM virtual_chats WHERE account_id=? AND external_chat=?"
+            ).bind(&account.id).bind(&chat.external_chat).fetch_optional(&state.pool).await?;
+            if desired != chat.external_chat && current.as_deref() != Some(&desired) {
+                if let Err(error)=ensure(state,account,&chat,None).await {
+                    report.failed+=1;
+                    tracing::warn!(account=%account.id,chat=%chat.external_chat,%error,
+                        "virtual room title refresh failed");
+                }
+            }
             continue;
         }
         if attempted >= limit { break; }
