@@ -164,7 +164,7 @@ pub async fn matrix_event(state: &Arc<AppState>, event: &Value) -> Result<()> {
                 .bind(&account.id).bind(&mapping.external_chat).bind(&remote_id)
                 .bind(room).bind(event_id).bind(sender).execute(&state.pool).await?;
         }
-        sqlx::query("INSERT OR IGNORE INTO outgoing(event_key) VALUES (?)
+        sqlx::query("INSERT OR IGNORE INTO outgoing(event_key) VALUES (?)")
             .bind(key).execute(&state.pool).await?;
     }
     Ok(())
