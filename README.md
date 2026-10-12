@@ -110,3 +110,10 @@ Install `pkg-config` and `libsqlite3-dev` on Debian/Ubuntu. SQLx dynamically lin
 - Private rooms still reside on the Matrix homeserver and count against its storage. Matrix E2EE and full remote membership/history mirroring remain unsupported.
 
 **Operational note:** the first sync can issue many Matrix createRoom, register, profile, and invite requests. Keep the batch size moderate to avoid Matrix homeserver rate limits and do not run several 2BM processes against the same accounts.
+
+## QQ group membership sync and Telegram recent-message import
+
+- **QQ roster:** authenticated OneBot `get_group_member_list` can populate Ghost users in an existing Matrix virtual group room. Management endpoint `POST /api/admin/accounts/{id}/qq/members` accepts `{"chat":"group:12345","limit":20}` (1–100). `group_increase` and `group_decrease` notifications update the Matrix ghost membership for already-mapped rooms. This is deliberately bounded to avoid mass registration for large groups; it does not yet paginate through every member of huge groups.
+- **Telegram recent import (opt in only):** `POST /api/admin/accounts/{id}/telegram/history` accepts `{"chat":"-10012345","limit":20}` (1–50), requires an existing Matrix virtual room and an online Telegram user session. The latest messages are imported oldest-first, with stable source IDs to avoid duplication. Text messages sent by other Telegram devices are shown via an account-scoped "Me (Telegram)" ghost identity.
+- This is **not Matrix-native historical backfill**. The imported messages receive **new Matrix timestamps**, not the original Telegram sent timestamp. Import is disabled by default, explicitly initiated by an administrator, and only supports text content. It does not restore edits, reactions, attachments, or historical membership.
+- **QQ recall:** OneBot `group_recall` and `friend_recall` notices redact linked incoming Matrix events using the original ghost identity. A recall arriving before its message is persisted as a tombstone, preventing the removed text from being replayed later. There is not yet a general bidirectional edit/delete/recall feature.

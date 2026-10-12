@@ -129,6 +129,68 @@ pub async fn list_chats(state: &Arc<AppState>, account_id: &str) -> Result<Vec<R
     Ok(chats)
 }
 
+
+#[derive(serde::Serialize)]
+pub struct HistoryImportReport {
+    pub fetched: usize,
+    pub imported: usize,
+    pub already_present: usize,
+    pub skipped_empty: usize,
+    pub failed: usize,
+}
+/// Opt-in recent-message import. These are ordinary Matrix messages sent
+/// now, NOT Matrix historical events retaining original Telegram timestamps.
+pub async fn import_recent(
+    state:&Arc<AppState>, account:&crate::db::Account, chat:&str,limit:usize
+)->Result<HistoryImportReport>{
+    if account.platform!="telegram_user" { bail!("Telegram personal account required"); }
+    if crate::db::mapping_for_chat(&state.pool,&account.id,chat).await?.is_none() {
+        bail!("the Matrix virtual room does not exist; synchronize chats first");
+    }
+    let id:i64=chat.parse().context("Telegram chat must be a numeric dialog ID")?;
+    let peer=PeerId::from_bot_api_dialog_id(id).context("invalid Telegram peer ID")?;
+    let client=state.telegram.live.read().await.get(&account.id).cloned()
+        .context("Telegram personal session is not online")?;
+    let resolved=client.resolve_peer(peer.to_ambient_ref()).await?;
+    let reference=resolved.to_ref().await
+        .map_err(|e|anyhow::anyhow!("Telegram peer reference: {e}"))?
+        .context("Telegram dialog reference is unavailable")?;
+    let mut iterator=client.iter_messages(reference).limit(limit.clamp(1,50));
+    let mut history=Vec::new();
+    while let Some(message)=iterator.next().await? {
+        history.push(message);
+    }
+    let mut report=HistoryImportReport {
+        fetched:history.len(),imported:0,already_present:0,skipped_empty:0,failed:0
+    };
+    // Telegram API lists newest-first; deliver oldest-first to the Matrix timeline.
+    for message in history.into_iter().rev() {
+        let text=message.text();
+        if text.trim().is_empty() { report.skipped_empty+=1;continue; }
+        let key=format!("{}:{}:{}",account.id,chat,message.id());
+        if crate::db::has_key(&state.pool,"incoming","source_key",&key).await? {
+            report.already_present+=1;continue;
+        }
+        let sender_id=if message.outgoing() {
+            format!("telegram-self:{}",account.id)
+        } else {
+            message.sender_id().and_then(|p|p.bot_api_dialog_id())
+                .unwrap_or(id).to_string()
+        };
+        let name=if message.outgoing() {"Me (Telegram)"}
+            else {message.sender().and_then(|p|p.name()).unwrap_or("Telegram contact")};
+        match relay::incoming(state,&account.id,chat,&message.id().to_string(),
+            &sender_id,name,text).await {
+            Ok(())=>report.imported+=1,
+            Err(error)=>{
+                report.failed+=1;
+                tracing::warn!(account=%account.id,chat,message=message.id(),%error,"Telegram recent import failed");
+            }
+        }
+    }
+    Ok(report)
+}
+
 pub async fn run(state: &Arc<AppState>, account_id: &str, credentials: &Value) -> Result<()> {
     let path = session_path(account_id)?;
     let session = Arc::new(SqliteSession::open(path).await?);

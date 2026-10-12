@@ -24,6 +24,7 @@ pub fn admin_router() -> Router<Arc<AppState>> {
         .route("/api/admin/accounts/{id}", delete(delete_account))
         .route("/api/admin/accounts/{id}/telegram/start", post(telegram_start))
         .route("/api/admin/accounts/{id}/telegram/verify", post(telegram_verify))
+        .route("/api/admin/accounts/{id}/telegram/history", post(telegram_history))
         .route("/api/admin/accounts/{id}/sync", post(sync_virtual_rooms))
         .route("/api/admin/virtual-rooms", get(list_virtual_rooms))
         .route("/api/admin/accounts/{id}/qq/members",post(sync_qq_members))
@@ -188,6 +189,26 @@ async fn telegram_verify(
     let status = crate::telegram_user::verify(&state,&id,&input.value).await
         .map_err(|e| error(StatusCode::UNPROCESSABLE_ENTITY,&e.to_string()))?;
     Ok(Json(json!({"status":status})))
+}
+
+
+#[derive(Deserialize)]
+struct TelegramHistoryRequest {
+    chat: String,
+    limit: Option<usize>,
+}
+async fn telegram_history(
+    State(state):State<Arc<AppState>>,headers:HeaderMap,Path(id):Path<String>,
+    Json(request):Json<TelegramHistoryRequest>
+)->ApiResult<Json<Value>>{
+    admin_check(&headers,&state)?;
+    let account=db::account(&state.pool,&id).await.map_err(internal)?
+        .filter(|a|a.enabled && a.platform=="telegram_user")
+        .ok_or_else(||error(StatusCode::NOT_FOUND,"enabled Telegram personal account not found"))?;
+    let report=crate::telegram_user::import_recent(
+        &state,&account,&request.chat,request.limit.unwrap_or(15).clamp(1,50)
+    ).await.map_err(|e|error(StatusCode::UNPROCESSABLE_ENTITY,&e.to_string()))?;
+    Ok(Json(json!(report)))
 }
 
 async fn delete_account(

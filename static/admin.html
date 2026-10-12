@@ -71,6 +71,13 @@
         <label>两步验证密码（需要时）<input id="tgPassword" type="password" autocomplete="off"></label>
       </div>
       <div class="row"><button id="tgVerify">提交验证码</button><button id="tg2fa" class="secondary">提交两步验证密码</button></div>
+      <h2 style="margin-top:25px">最近消息导入（手动）</h2>
+      <p class="muted">请先同步虚拟房间。仅支持 Telegram 真人账号，每次最多 50 条纯文本；会以当前时间写入 Matrix 时间线，不保留 Telegram 原始发送时间。重复导入会跳过已映射消息。</p>
+      <div class="grid">
+        <label>Telegram 会话 ID<input id="tgHistoryChat" placeholder="-100... 或私聊数字 ID"></label>
+        <label>条数<select id="tgHistoryLimit"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label>
+      </div>
+      <button id="tgHistory">导入最近消息</button>
     </section>
 
     <section class="panel">
@@ -82,6 +89,14 @@
       </div>
       <button id="syncChats">发现并同步虚拟房间</button>
       <div id="virtualRooms"></div>
+      <h2 style="margin-top:25px">QQ 群成员同步</h2>
+      <p class="muted">仅对已映射的 QQ 群房间添加虚拟成员；大群需分批处理，成员变化也会通过 OneBot 通知增量同步。</p>
+      <div class="grid">
+        <label>QQ 账号<select id="qqAccount"></select></label>
+        <label>群聊 ID<input id="qqMemberChat" placeholder="group:123456"></label>
+        <label>每次数量<select id="qqMemberLimit"><option value="20" selected>20</option><option value="50">50</option><option value="100">100</option></select></label>
+      </div>
+      <button id="qqMembers">同步群成员</button>
     </section>
     <section class="panel">
       <h2>手动房间映射（高级）</h2>
@@ -127,11 +142,15 @@
     $('accountSelection').replaceChildren();
     $('tgAccount').replaceChildren();
     $('syncAccount').replaceChildren();
+    $('qqAccount').replaceChildren();
     for (const account of accounts) {
       const option = document.createElement('option');
       option.value = account.id;
       option.textContent = account.label + ' (' + account.platform + ')';
       $('accountSelection').append(option);
+      if (account.enabled && account.platform === 'qq') {
+        $('qqAccount').append(option.cloneNode(true));
+      }
       if (account.enabled && (account.platform === 'qq' || account.platform === 'telegram_user')) {
         $('syncAccount').append(option.cloneNode(true));
       }
@@ -242,6 +261,30 @@
   $('tgStart').addEventListener('click', () => tgLogin('start',$('tgPhone').value.trim()));
   $('tgVerify').addEventListener('click', () => tgLogin('verify',$('tgCode').value.trim()));
   $('tg2fa').addEventListener('click', () => tgLogin('verify',$('tgPassword').value));
+  $('tgHistory').addEventListener('click', async () => {
+    const id=$('tgAccount').value, chat=$('tgHistoryChat').value.trim();
+    if (!id || !chat) { showMessage('请选择 Telegram 账号并填写会话 ID');return; }
+    if (!confirm('导入的消息会以当前时间显示在 Matrix 房间中。继续？')) return;
+    $('tgHistory').disabled=true;
+    try {
+      const result=await api('accounts/'+encodeURIComponent(id)+'/telegram/history',{
+        method:'POST',body:JSON.stringify({chat,limit:Number($('tgHistoryLimit').value)})
+      });
+      showMessage('扫描 '+result.fetched+'，导入 '+result.imported+
+        '，重复 '+result.already_present+'，空内容 '+result.skipped_empty+'，失败 '+result.failed);
+    } catch(e) {showMessage(e);} finally {$('tgHistory').disabled=false;}
+  });
+  $('qqMembers').addEventListener('click', async () => {
+    const id=$('qqAccount').value,chat=$('qqMemberChat').value.trim();
+    if (!id || !/^group:[0-9]+$/.test(chat)) {showMessage('请选择 QQ 账号并填写 group:数字');return;}
+    $('qqMembers').disabled=true;
+    try {
+      const result=await api('accounts/'+encodeURIComponent(id)+'/qq/members',{
+        method:'POST',body:JSON.stringify({chat,limit:Number($('qqMemberLimit').value)})
+      });
+      showMessage('群成员共 '+result.discovered+'，本批同步 '+result.joined+'，失败 '+result.failed);
+    } catch(e) {showMessage(e);} finally {$('qqMembers').disabled=false;}
+  });
   $('syncChats').addEventListener('click', async () => {
     const id = $('syncAccount').value;
     if (!id) { showMessage('请先登录 QQ 或 Telegram 真人账号'); return; }
