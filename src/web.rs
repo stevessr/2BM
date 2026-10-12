@@ -33,6 +33,7 @@ pub fn admin_router() -> Router<Arc<AppState>> {
         .route("/api/admin/room-warnings",get(list_room_warnings))
         .route("/api/admin/qq-inbox",get(list_qq_inbox))
         .route("/api/admin/telegram-inbox",get(list_telegram_inbox))
+        .route("/api/admin/queues/retry",post(retry_queued_message))
         .route("/api/admin/delivery-issues/resolve",post(resolve_delivery_issue))
         .route("/api/admin/accounts/{id}/qq/members",post(sync_qq_members))
         .route("/api/admin/mappings", get(list_mappings).post(create_mapping))
@@ -115,13 +116,54 @@ struct QqInboxInfo {
     received_at:String,
     next_attempt_at:String,
     last_error:Option<String>,
+    queue_kind:String,
 }
+fn queued_table(kind:&str)->Option<&'static str>{
+    match kind {
+        "qq_own"=>Some("qq_own_inbox"),
+        "qq_events"=>Some("qq_events_inbox"),
+        "telegram_events"=>Some("telegram_events_inbox"),
+        _=>None,
+    }
+}
+#[derive(Deserialize)]
+struct QueueRetryRequest {
+    account_id:String,
+    source_key:String,
+    kind:String,
+}
+async fn retry_queued_message(
+    State(state):State<Arc<AppState>>,headers:HeaderMap,
+    Json(request):Json<QueueRetryRequest>
+)->ApiResult<Json<Value>> {
+    admin_check(&headers,&state)?;
+    let table=queued_table(&request.kind).ok_or_else(||error(
+        StatusCode::BAD_REQUEST,"unknown queue kind"))?;
+    if request.source_key.len()>1024 || request.account_id.len()>128 {
+        return Err(error(StatusCode::BAD_REQUEST,"invalid queue identifier"));
+    }
+    // The table name comes only from a fixed allowlist. Keys are bound.
+    let statement=format!(
+        "UPDATE {table} SET next_attempt_at=CURRENT_TIMESTAMP
+         WHERE account_id=? AND source_key=?");
+    let updated=sqlx::query(&statement)
+        .bind(&request.account_id).bind(&request.source_key)
+        .execute(&state.pool).await.map_err(internal)?;
+    if updated.rows_affected()==0 {
+        return Err(error(StatusCode::NOT_FOUND,"queued record not found"));
+    }
+    tracing::info!(account=%request.account_id,kind=%request.kind,
+        "administrator scheduled an immediate encrypted inbox retry");
+    Ok(Json(json!({"scheduled":true})))
+}
+
 async fn list_telegram_inbox(
     State(state):State<Arc<AppState>>,headers:HeaderMap
 )->ApiResult<Json<Value>>{
     admin_check(&headers,&state)?;
     let entries:Vec<QqInboxInfo>=sqlx::query_as(
-        "SELECT account_id,source_key,attempts,received_at,next_attempt_at,last_error
+        "SELECT account_id,source_key,attempts,received_at,next_attempt_at,last_error,
+             'telegram_events' AS queue_kind
          FROM telegram_events_inbox ORDER BY received_at ASC LIMIT 200")
         .fetch_all(&state.pool).await.map_err(internal)?;
     let pending=crate::inbox::telegram_pending_count(&state)
@@ -135,11 +177,11 @@ async fn list_qq_inbox(
     admin_check(&headers,&state)?;
     // Never expose encrypted body or decrypted private QQ message content.
     let entries:Vec<QqInboxInfo>=sqlx::query_as(
-        "SELECT account_id,source_key,attempts,received_at,next_attempt_at,last_error
-         FROM qq_own_inbox
+        "SELECT account_id,source_key,attempts,received_at,next_attempt_at,last_error,
+             'qq_own' AS queue_kind FROM qq_own_inbox
          UNION ALL
-         SELECT account_id,source_key,attempts,received_at,next_attempt_at,last_error
-         FROM qq_events_inbox
+         SELECT account_id,source_key,attempts,received_at,next_attempt_at,last_error,
+             'qq_events' AS queue_kind FROM qq_events_inbox
          ORDER BY received_at ASC LIMIT 200")
         .fetch_all(&state.pool).await.map_err(internal)?;
     let total=crate::inbox::queued_count(&state).await.map_err(internal)?;
@@ -633,6 +675,13 @@ async fn qq_hook(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn queued_retry_only_accepts_static_tables(){
+        assert_eq!(queued_table("telegram_events"),Some("telegram_events_inbox"));
+        assert_eq!(queued_table("qq_events"),Some("qq_events_inbox"));
+        assert_eq!(queued_table("qq_own"),Some("qq_own_inbox"));
+        assert!(queued_table("mappings;DROP TABLE accounts").is_none());
+    }
     #[test]
     fn bearer_and_legacy_must_match() {
         let mut headers = HeaderMap::new();

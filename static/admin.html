@@ -225,6 +225,11 @@
       row.textContent=item.source_key+' · 重试 '+item.attempts+
         ' 次 · 下一次 '+item.next_attempt_at+
         (item.last_error?' · '+item.last_error:'');
+      const retry=document.createElement('button');
+      retry.className='secondary';
+      retry.textContent='立即重试';
+      retry.addEventListener('click',()=>retryQueued(item));
+      row.append(retry);
       $('telegramInbox').append(row);
     }
     $('qqInbox').replaceChildren();
@@ -237,6 +242,11 @@
       row.textContent=item.source_key+' · 重试 '+item.attempts+
         ' 次 · 下一次 '+item.next_attempt_at+
         (item.last_error ? ' · '+item.last_error : '');
+      const retry=document.createElement('button');
+      retry.className='secondary';
+      retry.textContent='立即重试';
+      retry.addEventListener('click',()=>retryQueued(item));
+      row.append(retry);
       $('qqInbox').append(row);
     }
     $('roomWarnings').replaceChildren();
@@ -278,6 +288,16 @@
         ' · ' + mapping.external_chat + ' → ' + mapping.matrix_room,
         () => remove('mappings/', mapping.id));
     }
+  }
+  async function retryQueued(item){
+    if (!confirm('立即重试加密队列中的这条回调？\n若 Matrix 房间仍然加密，2BM 仍会拒绝明文投递。')) return;
+    try{
+      await api('queues/retry',{method:'POST',body:JSON.stringify({
+        account_id:item.account_id,source_key:item.source_key,kind:item.queue_kind
+      })});
+      showMessage('已将该回调安排为立即重试。');
+      await refresh();
+    }catch(error){showMessage(error);}
   }
   async function resolveDelivery(issue,action) {
     const danger = action === 'retry'
