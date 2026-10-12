@@ -195,6 +195,37 @@ pub async fn membership_notice(
     Ok(())
 }
 
+
+pub fn reply_target(event:&Value)->Option<String>{
+    let segments=event["message"].as_array()?;
+    let reply=segments.iter().find(|segment|segment["type"]=="reply")?;
+    reply["data"]["id"].as_str().map(str::to_owned)
+        .or_else(||reply["data"]["id"].as_i64().map(|id|id.to_string()))
+}
+
+pub fn message_text(event:&Value)->String{
+    if let Some(segments)=event["message"].as_array() {
+        let mut text=String::new();
+        for segment in segments {
+            match segment["type"].as_str() {
+                Some("text")=>text.push_str(segment["data"]["text"].as_str().unwrap_or("")),
+                Some("at")=>{
+                    text.push('@');
+                    text.push_str(segment["data"]["qq"].as_str().unwrap_or("user"));
+                }
+                Some("image")=>text.push_str("[image]"),
+                Some("file")=>text.push_str("[file]"),
+                Some("record")=>text.push_str("[voice]"),
+                Some("video")=>text.push_str("[video]"),
+                _=>{},
+            }
+        }
+        if !text.trim().is_empty() {return text;}
+    }
+    event["raw_message"].as_str().or_else(||event["message"].as_str())
+        .unwrap_or_default().to_owned()
+}
+
 pub fn recall_target(event:&Value)->Option<(String,String)>{
     let msg=event["message_id"].as_i64().map(|id|id.to_string())
         .or_else(||event["message_id"].as_str().map(str::to_owned))?;
@@ -266,6 +297,16 @@ mod tests {
         assert_eq!(own_chat_id(&dm),Some("private:87".into()));
         assert_eq!(own_chat_id(&json!({"self_id":12,"user_id":88,
             "message_type":"private","target_id":87})),None);
+    }
+    #[test]
+    fn parse_remote_onebot_reply_and_text_segments(){
+        let event=json!({"message":[
+            {"type":"reply","data":{"id":"123"}},
+            {"type":"text","data":{"text":"response"}},
+            {"type":"image","data":{"file":"test"}}
+        ]});
+        assert_eq!(reply_target(&event),Some("123".to_owned()));
+        assert_eq!(message_text(&event),"response[image]");
     }
     #[test]
     fn classify_onebot_chats() {

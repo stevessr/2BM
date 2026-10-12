@@ -142,11 +142,21 @@ pub async fn set_virtual_room_name(
     Ok(())
 }
 pub async fn send_as(state:&Arc<AppState>,room:&str,body:&str,txn:&str,mxid:&str)->Result<String>{
+    send_as_reply(state,room,body,txn,mxid,None).await
+}
+pub async fn send_as_reply(
+    state:&Arc<AppState>,room:&str,body:&str,txn:&str,mxid:&str,
+    reply_to:Option<&str>
+)->Result<String>{
+    let mut content=json!({"msgtype":"m.text","body":body});
+    if let Some(reply)=reply_to {
+        content["m.relates_to"]=json!({"m.in_reply_to":{"event_id":reply}});
+    }
     let response = state.http.put(format!("{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
         state.config.homeserver,urlencoding::encode(room),urlencoding::encode(txn)))
         .bearer_auth(&state.config.as_token)
         .query(&[("user_id",mxid)])
-        .json(&json!({"msgtype":"m.text","body":body}))
+        .json(&content)
         .send().await?.error_for_status()?;
     let data:Value=response.json().await?;
     data["event_id"].as_str().map(str::to_owned)

@@ -323,8 +323,9 @@ pub async fn run(state: &Arc<AppState>, account_id: &str, credentials: &Value) -
                             .unwrap_or("Telegram contact");
                         let sender_id=message.sender_id()
                             .and_then(|p|p.bot_api_dialog_id()).unwrap_or(chat);
-                        relay::incoming(state,account_id,&chat_str,&msg,
-                            &sender_id.to_string(),sender,message.text()).await
+                        relay::incoming_with_reply(state,account_id,&chat_str,&msg,
+                            &sender_id.to_string(),sender,message.text(),
+                            message.reply_to_message_id().map(|_|()).as_ref().map(|_|"")).await
                     };
                     if let Err(e)=result {
                         tracing::warn!(account=%account_id,%e,"MTProto event relaying failed");

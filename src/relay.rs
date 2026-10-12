@@ -9,6 +9,13 @@ pub async fn incoming(
     state: &Arc<AppState>, account_id: &str, chat: &str, message_id: &str,
     sender_id: &str, sender: &str, text: &str
 ) -> Result<()> {
+    incoming_with_reply(state,account_id,chat,message_id,
+        sender_id,sender,text,None).await
+}
+pub async fn incoming_with_reply(
+    state: &Arc<AppState>, account_id: &str, chat: &str, message_id: &str,
+    sender_id: &str, sender: &str, text: &str, reply_to:Option<&str>
+) -> Result<()> {
     if text.trim().is_empty() || sender_id.is_empty() { return Ok(()); }
     let Some(account) = db::account(&state.pool, account_id).await?
         .filter(|a| a.enabled) else { return Ok(()); };
@@ -42,7 +49,16 @@ pub async fn incoming(
     ).await?;
     let ghost = matrix::ghost_user_id(state,account_id,sender_id);
     let txn = Uuid::new_v5(&Uuid::NAMESPACE_URL,source_key.as_bytes()).to_string();
-    let event_id=matrix::send_as(state,&mapping.matrix_room,text,&txn,&ghost).await?;
+    let matrix_reply=if let Some(remote_reply)=reply_to {
+        sqlx::query_scalar::<_,String>(
+            "SELECT matrix_event FROM event_links
+             WHERE account_id=? AND external_chat=? AND external_message=?
+               AND redacted=0 LIMIT 1")
+            .bind(account_id).bind(chat).bind(remote_reply)
+            .fetch_optional(&state.pool).await?
+    } else {None};
+    let event_id=matrix::send_as_reply(state,&mapping.matrix_room,text,
+        &txn,&ghost,matrix_reply.as_deref()).await?;
     sqlx::query("INSERT INTO event_links(
             account_id,external_chat,external_message,matrix_room,matrix_event,sender_mxid)
         VALUES (?,?,?,?,?,?)

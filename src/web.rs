@@ -549,9 +549,8 @@ async fn qq_hook(
         .filter(|s| !s.is_empty())
         .or_else(|| body["sender"]["nickname"].as_str())
         .unwrap_or("QQ user");
-    let text = body["raw_message"].as_str()
-        .or_else(|| body["message"].as_str())
-        .unwrap_or_default();
+    let text=adapters::qq::message_text(&body);
+    let reply_to=adapters::qq::reply_target(&body);
     if own {
         let source=state.clone();
         let own_account=account_id.clone();
@@ -567,7 +566,8 @@ async fn qq_hook(
             }
         });
     } else {
-        relay::incoming(&state,&account_id,&chat,&message_id,&sender_id,sender,text)
+        relay::incoming_with_reply(&state,&account_id,&chat,&message_id,
+            &sender_id,sender,&text,reply_to.as_deref())
             .await.map_err(internal)?;
     }
     Ok(Json(json!({})))
