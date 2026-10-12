@@ -230,6 +230,28 @@ def main():
         assert not any(e["content"].get("body")=="Sensitive plaintext must not leak"
             for e in messages(owner,room) if e["type"]=="m.room.message")
 
+        # Prove durable recovery: the first warning was injected only into
+        # 2BM's AS event stream and the real homeserver room is unencrypted.
+        # After operator reconciliation, the same queued callback must be
+        # delivered once and removed, without asking NapCat to resend it.
+        import sqlite3
+        database_path=os.environ["BRIDGE_DATABASE_URL"].removeprefix("sqlite://")
+        with sqlite3.connect(database_path,timeout=10) as database:
+            payload=database.execute(
+                "SELECT sealed FROM qq_events_inbox WHERE source_key LIKE '%:458'"
+            ).fetchone()
+            assert payload and "Sensitive plaintext" not in payload[0]
+            database.execute("DELETE FROM room_warnings WHERE matrix_room=?",
+                (room,))
+        restored=until(lambda:next((e for e in messages(owner,room)
+            if e["type"]=="m.room.message" and
+            e["content"].get("body")=="Sensitive plaintext must not leak"),None),
+            "persisted QQ callback restored after temporary block")
+        assert restored["sender"].startswith("@_2bm_p_")
+        until(lambda:not any(item["source_key"].endswith(":458")
+            for item in api("GET",ADMIN,"/api/admin/qq-inbox",
+                token=admin)["entries"]), "recovered callback dequeued")
+
         # Enable REAL Matrix encryption in the second DM as its contact Ghost
         # (the room creator). Then erase the local cache entry to simulate a
         # restored/older DB that missed the encryption state notification.
