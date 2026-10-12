@@ -141,6 +141,8 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
         )",
         "CREATE INDEX IF NOT EXISTS idx_qq_own_inbox_received
             ON qq_own_inbox(received_at)",
+        "CREATE INDEX IF NOT EXISTS idx_qq_own_inbox_account
+            ON qq_own_inbox(account_id)",
         "CREATE TABLE IF NOT EXISTS qq_events_inbox (
             source_key TEXT PRIMARY KEY,
             account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -152,6 +154,8 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
         )",
         "CREATE INDEX IF NOT EXISTS idx_qq_events_inbox_retry
             ON qq_events_inbox(next_attempt_at,received_at)",
+        "CREATE INDEX IF NOT EXISTS idx_qq_events_inbox_account
+            ON qq_events_inbox(account_id)",
         "CREATE TABLE IF NOT EXISTS telegram_events_inbox (
             source_key TEXT PRIMARY KEY,
             account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -163,6 +167,8 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
         )",
         "CREATE INDEX IF NOT EXISTS idx_telegram_inbox_retry
             ON telegram_events_inbox(next_attempt_at,received_at)",
+        "CREATE INDEX IF NOT EXISTS idx_telegram_inbox_account
+            ON telegram_events_inbox(account_id)",
         "CREATE TABLE IF NOT EXISTS appservice_events (
             event_id TEXT PRIMARY KEY,
             handled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
