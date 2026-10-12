@@ -96,3 +96,33 @@ scalable QQ group roster reconciliation, multi-replica support, metrics/alerts,
 automatic retention pruning and complete secure Matrix room teardown have not
 been validated or are not implemented. Real-account acceptance tests cannot be
 substituted with mocks or a green compilation check.
+
+## Additional production hardening (2026-10)
+
+The Matrix Application Service keeps a durable per-event completion table in
+addition to per-transaction records, and serializes inbound transactions within
+each process. Restart/retry of partially completed transaction batches will not
+reprocess completed Matrix events. This is not distributed HA.
+
+The QQ self-device callback path now commits an encrypted SQLite queue record
+before responding with success. A dedicated worker drains the queue and backs
+off individually failing records up to one hour, avoiding starvation of healthy
+accounts. The admin dashboard shows only IDs and delivery metadata, not text.
+Monitor this queue and the outbound uncertain-send journal; investigate
+persistent backlogs before they grow without bounds.
+
+All SQLite pool connections explicitly set WAL, synchronous FULL, a busy
+timeout and foreign key enforcement. Full sync reduces throughput and can
+still be defeated by defective hardware, broken volume durability semantics
+or inconsistent backup methods. Validate on the actual VPS filesystem.
+
+Matrix E2EE rooms must NOT be mapped to this plaintext bridge. The API
+rejects encrypted/unknown room state on manual mapping, and dynamically
+quarantines rooms when encryption state is observed; source messages then
+fail rather than entering Matrix as unencrypted data. Create a new
+unencrypted room to recover, and inspect source messages that were not
+successfully bridged while quarantined.
+
+The Synapse integration suite now includes AS event replay under distinct
+transaction IDs, source recall of Matrix-originated messages, self-first QQ
+DM identity, and encryption quarantine. It remains a OneBot stub, not real QQ.

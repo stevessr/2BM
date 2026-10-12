@@ -138,3 +138,14 @@ Install `pkg-config` and `libsqlite3-dev` on Debian/Ubuntu. SQLx dynamically lin
 ### Verification
 
 Rust CI runs `cargo check --all-targets`, `cargo test --all-targets`, and `cargo clippy --all-targets`. Mock-server tests include Matrix room alias crash recovery, QQ source recall idempotency/tombstones, and Matrix-to-QQ native replies with repeated AS transaction suppression. These tests do **not** replace a real Synapse/QQ/Telegram end-to-end exercise.
+
+## Crash-safe delivery and encryption policy
+
+- **Application Service replay:** Matrix transactions run serially within one 2BM process, with per-event SQLite checkpoints. Repeated events from different transaction IDs are skipped, including after a partial batch failure. This does **not** support multi-instance HA, which requires distributed coordination.
+- **QQ self-device webhooks:** authenticated `message_sent` payloads are XChaCha-encrypted and committed to `qq_own_inbox` before returning HTTP 200. A separate worker drains up to 100 queued items every two seconds. Failed items receive exponential backoff (capped at one hour), without starving other queued accounts. The admin panel lists queue counts and retry metadata, never decrypted chat bodies.
+- **Database durability:** every SQLite connection uses WAL, `synchronous=FULL`, foreign key enforcement and a 10-second busy timeout. The extra filesystem synchronization favors safe webhook acknowledgments over maximum throughput.
+- **Encrypted Matrix rooms:** unsupported E2EE rooms are quarantined. 2BM refuses to deliver QQ/Telegram plaintext to them and refuses new manual mappings if the Matrix room is encrypted or its encryption state cannot be verified. Once enabled, Matrix room encryption cannot simply be turned off; create a new unencrypted virtual room.
+- **Privileged operations:** DM Ghost creators send member invitations. QQ recalls targeting messages initially sent from Matrix use a sufficiently privileged bridge-owned room creator identity rather than attempting to impersonate the real Matrix user.
+- **Tests:** Rust CI checks schema/inbox/actor properties. A real Synapse integration job validates virtual-room identities, native replies, callback retransmission, source recalls, appservice event replay, own-message echoes and encrypted-room plaintext quarantine.
+
+**Remaining production blockers:** real NapCat and Telegram human-account interoperability, 24h soak, fault injection around remote delivery ambiguity, secure backup/restore acceptance, attachment/E2EE support if required.
