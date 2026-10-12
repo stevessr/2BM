@@ -364,8 +364,19 @@ mod tests {
             "three","a","encrypted",2).await.is_err());
         let pending=queue_load(&state).await.unwrap();
         assert_eq!(pending,vec![("a".into(),2)]);
+        // Two concurrent callbacks from different services race for the
+        // final slot. The capacity check must be in the same SQLite write
+        // statement as the insert: at most ONE gets accepted.
+        let (left,right)=tokio::join!(
+            durable_insert(&state,InboxTable::QqEvents,
+                "race-qq","a","encrypted",3),
+            durable_insert(&state,InboxTable::Telegram,
+                "race-tg","a","encrypted",3)
+        );
+        assert_eq!(u8::from(left.is_ok())+u8::from(right.is_ok()),1);
+        assert_eq!(queue_load(&state).await.unwrap(),vec![("a".into(),3)]);
         assert!(durable_insert(&state,InboxTable::QqOwn,"giant","a",
-            &"x".repeat(MAX_ENVELOPE_BYTES+1),3).await.is_err());
+            &"x".repeat(MAX_ENVELOPE_BYTES+1),4).await.is_err());
         state.pool.close().await;
         drop(state);
         let _=std::fs::remove_file(path);
