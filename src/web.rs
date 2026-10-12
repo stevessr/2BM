@@ -34,6 +34,7 @@ pub fn admin_router() -> Router<Arc<AppState>> {
         .route("/api/admin/qq-inbox",get(list_qq_inbox))
         .route("/api/admin/telegram-inbox",get(list_telegram_inbox))
         .route("/api/admin/queues/retry",post(retry_queued_message))
+        .route("/api/admin/queues/capacity",get(queue_capacity))
         .route("/api/admin/delivery-issues/resolve",post(resolve_delivery_issue))
         .route("/api/admin/accounts/{id}/qq/members",post(sync_qq_members))
         .route("/api/admin/mappings", get(list_mappings).post(create_mapping))
@@ -93,6 +94,20 @@ fn error(status: StatusCode, message: &str) -> ApiError {
     (status, Json(json!({"error":message})))
 }
 
+fn inbound_error(err:anyhow::Error)->ApiError {
+    let description=err.to_string();
+    if description.contains("inbound queue full for this account") {
+        tracing::warn!("inbound per-account queue capacity exceeded");
+        return error(StatusCode::SERVICE_UNAVAILABLE,
+            "inbound queue full; please retry webhook later");
+    }
+    if description.contains("encrypted message exceeds 256 KiB inbox limit") {
+        return error(StatusCode::PAYLOAD_TOO_LARGE,
+            "inbound message exceeds configured encrypted envelope limit");
+    }
+    internal(err)
+}
+
 fn internal(err: impl std::fmt::Display) -> ApiError {
     tracing::error!(error = %err, "request failed");
     error(StatusCode::INTERNAL_SERVER_ERROR, "internal service error")
@@ -132,6 +147,19 @@ struct QueueRetryRequest {
     source_key:String,
     kind:String,
 }
+async fn queue_capacity(
+    State(state):State<Arc<AppState>>,headers:HeaderMap
+)->ApiResult<Json<Value>>{
+    admin_check(&headers,&state)?;
+    let pending=crate::inbox::queue_load(&state).await.map_err(internal)?;
+    let rows:Vec<Value>=pending.into_iter().map(|(account_id,count)|
+        json!({"account_id":account_id,"pending":count,
+            "limit":crate::inbox::MAX_PENDING_PER_ACCOUNT})
+    ).collect();
+    Ok(Json(json!({"max_per_account":crate::inbox::MAX_PENDING_PER_ACCOUNT,
+        "accounts":rows})))
+}
+
 async fn retry_queued_message(
     State(state):State<Arc<AppState>>,headers:HeaderMap,
     Json(request):Json<QueueRetryRequest>
@@ -637,7 +665,7 @@ async fn qq_hook(
         }else{None};
         if let Some(key)=key {
             crate::inbox::enqueue_qq_event(&state,&account_id,&key,&body)
-                .await.map_err(internal)?;
+                .await.map_err(inbound_error)?;
         }
         return Ok(Json(json!({})));
     }
@@ -663,11 +691,11 @@ async fn qq_hook(
         // outbound requests finish, even when the process restarts.
         let text=adapters::qq::message_text(&body);
         crate::inbox::enqueue_qq_own(&state,&account_id,&chat,&message_id,&text)
-            .await.map_err(internal)?;
+            .await.map_err(inbound_error)?;
     } else {
         let key=format!("{account_id}:message:{chat}:{message_id}");
         crate::inbox::enqueue_qq_event(&state,&account_id,&key,&body)
-            .await.map_err(internal)?;
+            .await.map_err(inbound_error)?;
     }
     Ok(Json(json!({})))
 }

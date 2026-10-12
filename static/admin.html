@@ -163,6 +163,7 @@
     const roomWarnings = await api('room-warnings');
     const qqInbox = await api('qq-inbox');
     const telegramInbox = await api('telegram-inbox');
+    const queueCapacity = await api('queues/capacity');
     $('accounts').replaceChildren();
     $('accountSelection').replaceChildren();
     $('tgAccount').replaceChildren();
@@ -233,6 +234,15 @@
       $('telegramInbox').append(row);
     }
     $('qqInbox').replaceChildren();
+    for(const account of queueCapacity.accounts){
+      const row=document.createElement('p');
+      const percent=(account.pending/account.limit*100).toFixed(1);
+      row.textContent='账号 '+(accounts.find(a=>a.id===account.account_id)?.label
+        || account.account_id)+' · 队列 '+account.pending+'/'+account.limit+
+        ' ('+percent+'%)'+(account.pending>=account.limit*0.8
+        ? ' · 接近容量上限，请及时处理' : '');
+      $('qqInbox').append(row);
+    }
     const queueCount=document.createElement('p');
     queueCount.textContent='待投递：'+qqInbox.pending+' 条';
     $('qqInbox').append(queueCount);
