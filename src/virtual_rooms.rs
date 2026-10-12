@@ -187,13 +187,20 @@ mod tests {
         }
         async fn resolve()->Json<Value> {Json(json!({"room_id":"!stable:example.org"}))}
         async fn bridge_state(State(mock):State<Arc<Mock>>)->Json<Value> {
-            Json(json!({
-                "network":"2bm",
-                "account_id":if mock.poisoned.load(Ordering::SeqCst) {
-                    "malicious-different-account"
-                } else {"test-account"},
-                "external_chat":"group:987"
-            }))
+            Json(json!([
+                {"type":"m.room.create","state_key":"",
+                 "sender":"@_2bm:example.org",
+                 "content":{"room_version":"10"}},
+                {"type":"com.2bm.bridge","state_key":"",
+                 "sender":"@_2bm:example.org",
+                 "content":{
+                    "network":"2bm",
+                    "account_id":if mock.poisoned.load(Ordering::SeqCst) {
+                        "malicious-different-account"
+                    } else {"test-account"},
+                    "external_chat":"group:987"
+                }}
+            ]))
         }
 
         let mock=Arc::new(Mock {
@@ -206,7 +213,7 @@ mod tests {
         let router=Router::new()
             .route("/_matrix/client/v3/createRoom",post(create))
             .route("/_matrix/client/v3/directory/room/{alias}",get(resolve))
-            .route("/_matrix/client/v3/rooms/{room}/state/com.2bm.bridge",get(bridge_state))
+            .route("/_matrix/client/v3/rooms/{room}/state",get(bridge_state))
             .with_state(mock.clone());
         let server=tokio::spawn(async move {
             axum::serve(listener,router).await.unwrap();

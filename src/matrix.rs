@@ -90,16 +90,33 @@ pub async fn create_virtual_room(
         // independently with the same alias, even after DB loss. Never bind
         // private account conversations to an unverified room.
         let request=state.http.get(format!(
-            "{}/_matrix/client/v3/rooms/{}/state/com.2bm.bridge",
+            "{}/_matrix/client/v3/rooms/{}/state",
             state.config.homeserver,urlencoding::encode(room)))
             .bearer_auth(&state.config.as_token);
         let request=if let Some(user)=creator {
             request.query(&[("user_id",user)])
         } else {request};
-        let bridge:Value=request.send().await?.error_for_status()?.json().await?;
-        if bridge["network"]!="2bm" ||
-            bridge["account_id"]!=account || bridge["external_chat"]!=chat {
-            bail!("virtual room alias collision: room bridge ownership did not match");
+        let events:Vec<Value>=request.send().await?
+            .error_for_status()?.json().await?;
+        // Read the *signed sender fields*, not just m.room state content.
+        // A foreign room may contain forged com.2bm.bridge content. Recover
+        // only rooms whose create event AND bridge marker originated from
+        // the very same AS-controlled actor that provisions this chat.
+        let expected=creator.map(str::to_owned)
+            .unwrap_or_else(||state.config.bot_user());
+        let original_creator=events.iter().find(|event|
+            event["type"]=="m.room.create" && event["state_key"]=="");
+        let owned_marker=events.iter().find(|event|
+            event["type"]=="com.2bm.bridge" && event["state_key"]=="");
+        let valid=original_creator.is_some_and(|event|
+            event["sender"]==expected)
+            && owned_marker.is_some_and(|event|
+                event["sender"]==expected &&
+                event["content"]["network"]=="2bm" &&
+                event["content"]["account_id"]==account &&
+                event["content"]["external_chat"]==chat);
+        if !valid {
+            bail!("virtual room alias collision: room creator or bridge marker is not owned by this account");
         }
         return Ok(room.to_owned());
     }
