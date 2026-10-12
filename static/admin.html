@@ -99,6 +99,11 @@
       <button id="qqMembers">同步群成员</button>
     </section>
     <section class="panel">
+      <h2>QQ 跨设备消息持久化队列</h2>
+      <p class="muted">QQ 自身消息在收到 Webhook 时先加密保存至 SQLite，由后台投递。下方只展示消息 ID 和重试元信息，不展示聊天正文。</p>
+      <div id="qqInbox"></div>
+    </section>
+    <section class="panel">
       <h2>Matrix 加密兼容性警告</h2>
       <p class="muted">2BM 暂不支持 Matrix 端到端加密。若客户端将桥接房间设为加密，相关消息无法正确转发。请停止使用该房间，在 Matrix 客户端新建未加密房间并重新配置映射。</p>
       <div id="roomWarnings"></div>
@@ -151,6 +156,7 @@
     const virtualRooms = await api('virtual-rooms');
     const deliveryIssues = await api('delivery-issues');
     const roomWarnings = await api('room-warnings');
+    const qqInbox = await api('qq-inbox');
     $('accounts').replaceChildren();
     $('accountSelection').replaceChildren();
     $('tgAccount').replaceChildren();
@@ -202,6 +208,18 @@
         row.append(status);
       }
       $('virtualRooms').append(row);
+    }
+    $('qqInbox').replaceChildren();
+    const queueCount=document.createElement('p');
+    queueCount.textContent='待投递：'+qqInbox.pending+' 条';
+    $('qqInbox').append(queueCount);
+    for(const item of qqInbox.entries){
+      const row=document.createElement('div');
+      row.className='entry';
+      row.textContent=item.source_key+' · 重试 '+item.attempts+
+        ' 次 · 下一次 '+item.next_attempt_at+
+        (item.last_error ? ' · '+item.last_error : '');
+      $('qqInbox').append(row);
     }
     $('roomWarnings').replaceChildren();
     for (const warning of roomWarnings) {
