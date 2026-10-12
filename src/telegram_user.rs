@@ -314,23 +314,24 @@ pub async fn run(state: &Arc<AppState>, account_id: &str, credentials: &Value) -
                 if let Some(chat) = message.peer_id().bot_api_dialog_id() {
                     let chat_str=chat.to_string();
                     let msg=message.id().to_string();
-                    let result=if message.outgoing() {
-                        relay::incoming_own(state,account_id,&chat_str,&msg,
-                            &format!("telegram-self:{account_id}"),
-                            "Me (Telegram)",message.text()).await
-                    } else {
-                        let sender=message.sender().and_then(|p|p.name())
-                            .unwrap_or("Telegram contact");
-                        let sender_id=message.sender_id()
-                            .and_then(|p|p.bot_api_dialog_id()).unwrap_or(chat);
-                        let reply_id=message.reply_to_message_id()
-                            .map(|id|id.to_string());
-                        relay::incoming_with_reply(state,account_id,&chat_str,&msg,
-                            &sender_id.to_string(),sender,message.text(),
-                            reply_id.as_deref()).await
+                    let outgoing=message.outgoing();
+                    let sender=if outgoing {"Me (Telegram)"}
+                        else {message.sender().and_then(|p|p.name())
+                            .unwrap_or("Telegram contact")};
+                    let sender_id=if outgoing {
+                        format!("telegram-self:{account_id}")
+                    }else{
+                        message.sender_id().and_then(|p|p.bot_api_dialog_id())
+                            .unwrap_or(chat).to_string()
                     };
-                    if let Err(e)=result {
-                        tracing::warn!(account=%account_id,%e,"MTProto event relaying failed");
+                    let reply_id=message.reply_to_message_id()
+                        .map(|id|id.to_string());
+                    if let Err(error)=crate::inbox::enqueue_telegram(
+                        state,account_id,&chat_str,&msg,&sender_id,sender,
+                        message.text(),outgoing,reply_id.as_deref()).await {
+                        // Never intentionally advance stream state past a
+                        // message that has not been durably written.
+                        break Err(error);
                     }
                 }
             }
@@ -339,8 +340,10 @@ pub async fn run(state: &Arc<AppState>, account_id: &str, credentials: &Value) -
         }
     };
     state.telegram.live.write().await.remove(account_id);
-    if let Err(error) = updates.sync_update_state().await {
-        tracing::warn!(%error, "unable to persist Telegram update state");
+    if result.is_ok() {
+        if let Err(error)=updates.sync_update_state().await {
+            tracing::warn!(%error,"unable to persist Telegram update state");
+        }
     }
     handle.quit();
     let _ = pool_task.await;

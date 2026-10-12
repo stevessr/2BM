@@ -32,6 +32,7 @@ pub fn admin_router() -> Router<Arc<AppState>> {
         .route("/api/admin/delivery-issues",get(list_delivery_issues))
         .route("/api/admin/room-warnings",get(list_room_warnings))
         .route("/api/admin/qq-inbox",get(list_qq_inbox))
+        .route("/api/admin/telegram-inbox",get(list_telegram_inbox))
         .route("/api/admin/delivery-issues/resolve",post(resolve_delivery_issue))
         .route("/api/admin/accounts/{id}/qq/members",post(sync_qq_members))
         .route("/api/admin/mappings", get(list_mappings).post(create_mapping))
@@ -115,6 +116,19 @@ struct QqInboxInfo {
     next_attempt_at:String,
     last_error:Option<String>,
 }
+async fn list_telegram_inbox(
+    State(state):State<Arc<AppState>>,headers:HeaderMap
+)->ApiResult<Json<Value>>{
+    admin_check(&headers,&state)?;
+    let entries:Vec<QqInboxInfo>=sqlx::query_as(
+        "SELECT account_id,source_key,attempts,received_at,next_attempt_at,last_error
+         FROM telegram_events_inbox ORDER BY received_at ASC LIMIT 200")
+        .fetch_all(&state.pool).await.map_err(internal)?;
+    let pending=crate::inbox::telegram_pending_count(&state)
+        .await.map_err(internal)?;
+    Ok(Json(json!({"pending":pending,"entries":entries})))
+}
+
 async fn list_qq_inbox(
     State(state):State<Arc<AppState>>,headers:HeaderMap
 )->ApiResult<Json<Value>>{

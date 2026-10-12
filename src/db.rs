@@ -152,6 +152,17 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
         )",
         "CREATE INDEX IF NOT EXISTS idx_qq_events_inbox_retry
             ON qq_events_inbox(next_attempt_at,received_at)",
+        "CREATE TABLE IF NOT EXISTS telegram_events_inbox (
+            source_key TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            sealed TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            next_attempt_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_error TEXT
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_telegram_inbox_retry
+            ON telegram_events_inbox(next_attempt_at,received_at)",
         "CREATE TABLE IF NOT EXISTS appservice_events (
             event_id TEXT PRIMARY KEY,
             handled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

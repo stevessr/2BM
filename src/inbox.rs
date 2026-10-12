@@ -149,6 +149,83 @@ pub async fn drain_qq_events(state:&Arc<AppState>,limit:i64)->Result<usize>{
     Ok(processed)
 }
 
+
+/// Write MTProto updates before confirming/persisting update-stream state.
+/// Keys are stable per Telegram dialog/message and survive process restarts.
+pub async fn enqueue_telegram(
+    state:&Arc<AppState>,account:&str,chat:&str,message_id:&str,
+    sender_id:&str,sender:&str,text:&str,outgoing:bool,reply_to:Option<&str>
+)->Result<()>{
+    let key=format!("telegram:{account}:{chat}:{message_id}");
+    let payload=json!({
+        "chat":chat,"message_id":message_id,"sender_id":sender_id,
+        "sender":sender,"text":text,"outgoing":outgoing,"reply_to":reply_to
+    });
+    let sealed=crypto::encrypt(&state.config.credential_key,&payload)?;
+    sqlx::query("INSERT OR IGNORE INTO telegram_events_inbox
+        (source_key,account_id,sealed) VALUES (?,?,?)")
+        .bind(&key).bind(account).bind(sealed).execute(&state.pool).await?;
+    Ok(())
+}
+
+pub async fn drain_telegram(state:&Arc<AppState>,limit:i64)->Result<usize>{
+    let items:Vec<(String,String,String)>=sqlx::query_as(
+        "SELECT source_key,account_id,sealed FROM telegram_events_inbox
+         WHERE next_attempt_at <= CURRENT_TIMESTAMP
+         ORDER BY next_attempt_at,received_at,source_key LIMIT ?")
+        .bind(limit.clamp(1,100)).fetch_all(&state.pool).await?;
+    let mut delivered=0;
+    for (key,account_id,sealed) in items {
+        let outcome:Result<()> = async {
+            let active=crate::db::account(&state.pool,&account_id).await?
+                .is_some_and(|a|a.enabled && a.platform=="telegram_user");
+            if !active {
+                anyhow::bail!("Telegram account not active; queue retained");
+            }
+            let payload:Value=crypto::decrypt(&state.config.credential_key,&sealed)
+                .context("Telegram queued message decryption failed")?;
+            let chat=payload["chat"].as_str().context("queued chat missing")?;
+            let id=payload["message_id"].as_str().context("queued ID missing")?;
+            let sender_id=payload["sender_id"].as_str()
+                .context("queued sender ID missing")?;
+            let sender=payload["sender"].as_str().unwrap_or("Telegram user");
+            let text=payload["text"].as_str().context("queued text missing")?;
+            if payload["outgoing"]==true {
+                relay::incoming_own(state,&account_id,chat,id,sender_id,sender,text)
+                    .await?;
+            }else{
+                relay::incoming_with_reply(
+                    state,&account_id,chat,id,sender_id,sender,text,
+                    payload["reply_to"].as_str()).await?;
+            }
+            Ok(())
+        }.await;
+        match outcome {
+            Ok(())=>{
+                sqlx::query("DELETE FROM telegram_events_inbox WHERE source_key=?")
+                    .bind(&key).execute(&state.pool).await?;
+                delivered+=1;
+            }
+            Err(error)=>{
+                sqlx::query("UPDATE telegram_events_inbox SET attempts=attempts+1,
+                    next_attempt_at=datetime('now',
+                        '+' || MIN(3600,(attempts+1)*(attempts+1)*5) || ' seconds'),
+                    last_error='MTProto bridge delivery temporarily unavailable'
+                    WHERE source_key=?")
+                    .bind(&key).execute(&state.pool).await?;
+                tracing::warn!(account=%account_id,%error,
+                    "MTProto update retained in durable encrypted queue");
+            }
+        }
+    }
+    Ok(delivered)
+}
+
+pub async fn telegram_pending_count(state:&Arc<AppState>)->Result<i64>{
+    Ok(sqlx::query_scalar("SELECT COUNT(*) FROM telegram_events_inbox")
+        .fetch_one(&state.pool).await?)
+}
+
 /// Process encrypted QQ callbacks independently from account discovery.
 pub async fn run_worker(state:Arc<AppState>){
     loop {
@@ -157,6 +234,9 @@ pub async fn run_worker(state:Arc<AppState>){
         }
         if let Err(error)=drain_qq_events(&state,100).await {
             tracing::warn!(%error,"QQ callback inbox drain failed");
+        }
+        if let Err(error)=drain_telegram(&state,100).await {
+            tracing::warn!(%error,"Telegram update inbox drain failed");
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
