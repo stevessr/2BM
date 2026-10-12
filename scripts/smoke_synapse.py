@@ -203,6 +203,11 @@ def main():
         assert creation["sender"]==expected,creation
         names=[e for e in messages(owner,second_room) if e["type"]=="m.room.name"]
         assert names and not names[-1]["content"]["name"].startswith("Me ("),names
+        self_first=until(lambda:next((e for e in messages(owner,second_room)
+            if e["type"]=="m.room.message" and e["content"].get("body")==
+                "Sent from another QQ device"),None),"self-first actual message")
+        assert self_first["sender"].startswith("@_2bm_p_"),self_first
+        assert self_first["sender"]!=expected,"self message impersonated contact"
         print("PASS Synapse/2BM/OneBot: virtual room, replies, dedup, recalls, self-first DM")
     finally:
         server.shutdown()

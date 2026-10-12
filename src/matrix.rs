@@ -108,6 +108,25 @@ pub async fn leave_ghost(state:&Arc<AppState>,room:&str,ghost:&str)->Result<()>{
         .bind(room).bind(ghost).execute(&state.pool).await?;
     Ok(())
 }
+/// For a private virtual room the external contact's Ghost owns the room;
+/// the bridge Bot is not automatically a participant and cannot invite others.
+/// Public/group virtual rooms are created by the Bot itself.
+async fn room_inviter(state:&Arc<AppState>,room:&str)->Result<String>{
+    let info:Option<(String,String,String)>=sqlx::query_as(
+        "SELECT m.account_id,m.external_chat,a.platform
+         FROM mappings m JOIN accounts a ON a.id=m.account_id
+         JOIN virtual_chats v ON v.account_id=m.account_id
+             AND v.external_chat=m.external_chat
+         WHERE m.matrix_room=? AND v.direct=1 LIMIT 1")
+        .bind(room).fetch_optional(&state.pool).await?;
+    if let Some((account,chat,platform))=info {
+        let peer=if platform=="qq" {
+            chat.strip_prefix("private:").unwrap_or(&chat)
+        } else { &chat };
+        Ok(ghost_user_id(state,&account,peer))
+    } else {Ok(state.config.bot_user())}
+}
+
 pub async fn ensure_ghost_in_room(state:&Arc<AppState>,room:&str,ghost:&str)->Result<()>{
     let known:Option<i64>=sqlx::query_scalar(
         "SELECT 1 FROM ghost_room_memberships WHERE matrix_room=? AND ghost_mxid=?"
@@ -116,9 +135,11 @@ pub async fn ensure_ghost_in_room(state:&Arc<AppState>,room:&str,ghost:&str)->Re
     // Joining as a Matrix appservice masqueraded user may work immediately
     // when it created the room; otherwise the bot must invite the ghost.
     if join_ghost(state,room,ghost).await.is_err() {
+        let inviter=room_inviter(state,room).await?;
         let response=state.http.post(format!("{}/_matrix/client/v3/rooms/{}/invite",
             state.config.homeserver,urlencoding::encode(room)))
             .bearer_auth(&state.config.as_token)
+            .query(&[("user_id",&inviter)])
             .json(&json!({"user_id":ghost})).send().await?;
         if !response.status().is_success() {
             tracing::debug!(status=%response.status(),"Matrix ghost invite not accepted");
