@@ -394,10 +394,9 @@ mod tests {
         let _=std::fs::remove_file(path);
     }
 
-    #[test]
-    fn recalls_of_matrix_owner_messages_use_privileged_bridge_identity() {
-        let dbfile=std::path::PathBuf::new();
-        let _=dbfile; // no DB needed: actor lookup is pure
+    #[tokio::test]
+    async fn recalls_of_matrix_owner_messages_use_privileged_bridge_identity() {
+        // Actor selection does not need live Matrix or external network access.
         let mut account=db::Account{
             id:"acct".to_owned(),platform:"qq".to_owned(),label:"test".to_owned(),
             owner_mxid:"@owner:example.org".to_owned(),
