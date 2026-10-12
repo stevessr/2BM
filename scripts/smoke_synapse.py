@@ -134,6 +134,18 @@ def main():
         sent=until(lambda:SENT[0] if SENT else None,"Matrix -> OneBot")
         assert sent["message"][0]=={"type":"reply","data":{"id":"456"}},sent
         assert sent["message"][1]["data"]["text"]=="Matrix response",sent
+        # Intentionally replay the exact same Matrix event under *different*
+        # appservice transaction IDs. It must not produce a second QQ send.
+        owner_event=until(lambda:next((e for e in messages(owner,room)
+            if e["type"]=="m.room.message" and e["sender"]=="@owner:smoke.test"
+            and e["content"].get("body","").endswith("Matrix response")),None),
+            "source Matrix reply event")
+        hs_token=os.environ["BRIDGE_MATRIX_HS_TOKEN"]
+        api("PUT",AS,"/_matrix/app/v1/transactions/qa-replay-1",
+            {"events":[owner_event]},hs_token)
+        api("PUT",AS,"/_matrix/app/v1/transactions/qa-replay-2",
+            {"events":[owner_event]},hs_token)
+        assert len(SENT)==1,"replayed appservice event caused duplicate QQ send"
         echo={"post_type":"message_sent","message_type":"private",
               "self_id":999,"user_id":999,"target_id":123,
               "message_id":9001,"raw_message":"Matrix response",
