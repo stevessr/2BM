@@ -28,6 +28,10 @@ pub async fn ghost(state: &Arc<AppState>,account:&str,sender:&str,display:&str)-
         .json(&json!({"displayname":display.chars().take(100).collect::<String>()}))
         .send().await;
     if let Err(error)=response {tracing::debug!(%error,"unable to update ghost display name");}
+    sqlx::query("INSERT INTO ghost_users(mxid,account_id,contact_id,display_name)
+        VALUES (?,?,?,?) ON CONFLICT(mxid) DO UPDATE SET display_name=excluded.display_name")
+        .bind(&mxid).bind(account).bind(sender).bind(display)
+        .execute(&state.pool).await?;
     Ok(mxid)
 }
 pub async fn join_bot(state:&Arc<AppState>,room:&str)->Result<()> {join(state,room,None).await}

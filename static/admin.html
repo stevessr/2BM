@@ -72,8 +72,19 @@
       </div>
       <div class="row"><button id="tgVerify">提交验证码</button><button id="tg2fa" class="secondary">提交两步验证密码</button></div>
     </section>
+
     <section class="panel">
-      <h2>房间映射</h2>
+      <h2>虚拟房间 · 自动发现</h2>
+      <p class="muted">由 2BM 根据已登录的 QQ 好友/群聊和 Telegram 会话建立真实 Matrix 房间，并邀请账号控制者；无需手动复制房间 ID。只创建房间，不回填历史消息。</p>
+      <div class="grid">
+        <label>来源账号<select id="syncAccount"></select></label>
+        <label>本次最多同步<select id="syncLimit"><option value="20">20 个会话</option><option value="50" selected>50 个会话</option><option value="100">100 个会话</option></select></label>
+      </div>
+      <button id="syncChats">发现并同步虚拟房间</button>
+      <div id="virtualRooms"></div>
+    </section>
+    <section class="panel">
+      <h2>手动房间映射（高级）</h2>
       <p class="muted">收到外部新会话时自动创建 Matrix 房间、邀请控制者及虚拟联系人；此处也可手动映射已有房间。</p>
       <div class="grid">
         <label>账号<select id="accountSelection"></select></label>
@@ -111,14 +122,19 @@
   async function refresh() {
     accounts = await api('accounts');
     const mappings = await api('mappings');
+    const virtualRooms = await api('virtual-rooms');
     $('accounts').replaceChildren();
     $('accountSelection').replaceChildren();
     $('tgAccount').replaceChildren();
+    $('syncAccount').replaceChildren();
     for (const account of accounts) {
       const option = document.createElement('option');
       option.value = account.id;
       option.textContent = account.label + ' (' + account.platform + ')';
       $('accountSelection').append(option);
+      if (account.enabled && (account.platform === 'qq' || account.platform === 'telegram_user')) {
+        $('syncAccount').append(option.cloneNode(true));
+      }
       if (account.platform === 'telegram_user') {
         const tgOption = option.cloneNode(true);
         tgOption.textContent += account.enabled ? ' · 已验证' : ' · 待验证';
@@ -126,6 +142,31 @@
       }
       addRow($('accounts'), account.label + ' · ' + account.platform + ' · ' + account.owner_mxid + ' · ' + account.id,
         () => remove('accounts/', account.id));
+    }
+    $('virtualRooms').replaceChildren();
+    for (const room of virtualRooms) {
+      const source = accounts.find(a => a.id === room.account_id);
+      const row = document.createElement('div');
+      row.className = 'entry';
+      const title = document.createElement('span');
+      title.textContent = (source?.label || room.account_id) + ' · ' +
+        room.title + (room.direct ? ' · 私聊' : ' · 群聊') + ' · ' + room.external_chat;
+      row.append(title);
+      if (room.matrix_room) {
+        const link = document.createElement('a');
+        link.href = 'https://matrix.to/#/' + encodeURIComponent(room.matrix_room);
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = '打开 Matrix 房间 ↗';
+        link.style.color = '#8ab4ff';
+        row.append(link);
+      } else {
+        const status = document.createElement('span');
+        status.className = 'muted';
+        status.textContent = '尚未成功创建';
+        row.append(status);
+      }
+      $('virtualRooms').append(row);
     }
     $('mappings').replaceChildren();
     for (const mapping of mappings) {
@@ -201,6 +242,22 @@
   $('tgStart').addEventListener('click', () => tgLogin('start',$('tgPhone').value.trim()));
   $('tgVerify').addEventListener('click', () => tgLogin('verify',$('tgCode').value.trim()));
   $('tg2fa').addEventListener('click', () => tgLogin('verify',$('tgPassword').value));
+  $('syncChats').addEventListener('click', async () => {
+    const id = $('syncAccount').value;
+    if (!id) { showMessage('请先登录 QQ 或 Telegram 真人账号'); return; }
+    $('syncChats').disabled = true;
+    showMessage('正在同步，请勿重复提交。');
+    try {
+      const result = await api('accounts/' + encodeURIComponent(id) + '/sync', {
+        method: 'POST',
+        body: JSON.stringify({limit:Number($('syncLimit').value)})
+      });
+      await refresh();
+      showMessage('发现 ' + result.discovered + ' 个会话，本次处理 ' +
+        result.provisioned + ' 个，失败 ' + result.failed + ' 个。');
+    } catch(err) { showMessage(err); }
+    finally { $('syncChats').disabled = false; }
+  });
   $('addMapping').addEventListener('click', async () => {
     try {
       await api('mappings', {method:'POST', body:JSON.stringify({

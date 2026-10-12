@@ -38,10 +38,12 @@ pub async fn run(state: Arc<AppState>) {
                                 "telegram_user" => crate::telegram_user::run(&service, &id, &secrets).await,
                                 "discord" => adapters::discord::gateway(&service, &id, &secrets).await,
                                 "qq" => {
-                                    let result = if let Some(account) = db::account(&service.pool, &id).await? {
-                                        crate::virtual_rooms::sync(&service, &account, 30)
-                                            .await.map(|_| ())
-                                    } else { Ok(()) };
+                                    let result = match db::account(&service.pool, &id).await {
+                                        Ok(Some(account)) => crate::virtual_rooms::sync(
+                                            &service, &account, 30).await.map(|_| ()),
+                                        Ok(None) => Ok(()),
+                                        Err(error) => Err(error),
+                                    };
                                     tokio::time::sleep(Duration::from_secs(600)).await;
                                     result
                                 },

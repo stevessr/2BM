@@ -24,6 +24,8 @@ pub fn admin_router() -> Router<Arc<AppState>> {
         .route("/api/admin/accounts/{id}", delete(delete_account))
         .route("/api/admin/accounts/{id}/telegram/start", post(telegram_start))
         .route("/api/admin/accounts/{id}/telegram/verify", post(telegram_verify))
+        .route("/api/admin/accounts/{id}/sync", post(sync_virtual_rooms))
+        .route("/api/admin/virtual-rooms", get(list_virtual_rooms))
         .route("/api/admin/mappings", get(list_mappings).post(create_mapping))
         .route("/api/admin/mappings/{id}", delete(delete_mapping))
 }
@@ -197,6 +199,48 @@ async fn delete_account(
     Ok(StatusCode::NO_CONTENT)
 }
 
+
+#[derive(Deserialize)]
+struct SyncRequest {
+    limit: Option<usize>,
+}
+async fn sync_virtual_rooms(
+    State(state): State<Arc<AppState>>, headers: HeaderMap, Path(id): Path<String>,
+    Json(input): Json<SyncRequest>,
+) -> ApiResult<Json<Value>> {
+    admin_check(&headers,&state)?;
+    let account = db::account(&state.pool,&id).await.map_err(internal)?
+        .ok_or_else(||error(StatusCode::NOT_FOUND,"account not found"))?;
+    if !account.enabled {
+        return Err(error(StatusCode::CONFLICT,"account must be logged in/enabled"));
+    }
+    let limit = input.limit.unwrap_or(30).clamp(1,100);
+    let report = crate::virtual_rooms::sync(&state,&account,limit).await
+        .map_err(|e|error(StatusCode::UNPROCESSABLE_ENTITY,&e.to_string()))?;
+    Ok(Json(json!(report)))
+}
+#[derive(serde::Serialize, sqlx::FromRow)]
+struct VirtualRoomInfo {
+    account_id: String,
+    external_chat: String,
+    title: String,
+    direct: bool,
+    matrix_room: Option<String>,
+    updated_at: String,
+}
+async fn list_virtual_rooms(
+    State(state): State<Arc<AppState>>,headers:HeaderMap
+)->ApiResult<Json<Value>>{
+    admin_check(&headers,&state)?;
+    let rooms:Vec<VirtualRoomInfo>=sqlx::query_as(
+        "SELECT v.account_id,v.external_chat,v.title,v.direct,v.updated_at,m.matrix_room
+        FROM virtual_chats v LEFT JOIN mappings m ON v.account_id=m.account_id
+            AND v.external_chat=m.external_chat
+        ORDER BY v.updated_at DESC, v.title ASC LIMIT 1000"
+    ).fetch_all(&state.pool).await.map_err(internal)?;
+    Ok(Json(json!(rooms)))
+}
+
 async fn list_mappings(
     State(state): State<Arc<AppState>>, headers: HeaderMap
 ) -> ApiResult<Json<Value>> {
@@ -299,7 +343,11 @@ async fn query_user(
     headers: HeaderMap, Query(query): Query<HashMap<String, String>>
 ) -> ApiResult<Json<Value>> {
     hs_check(&headers, &query, &state)?;
-    if user == state.config.bot_user() { Ok(Json(json!({}))) }
+    if user == state.config.bot_user() { return Ok(Json(json!({}))); }
+    let owned: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM ghost_users WHERE mxid = ? LIMIT 1"
+    ).bind(&user).fetch_optional(&state.pool).await.map_err(internal)?;
+    if owned.is_some() { Ok(Json(json!({}))) }
     else { Err(error(StatusCode::NOT_FOUND, "unknown Matrix user")) }
 }
 
