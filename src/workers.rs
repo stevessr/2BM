@@ -14,7 +14,7 @@ pub async fn set_status(state:&Arc<AppState>, account_id:&str, status:&str)
 pub async fn run(state: Arc<AppState>) {
     let mut jobs: HashMap<String, (String, JoinHandle<()>)> = HashMap::new();
     loop {
-         match db::accounts(&state.pool).await {
+        match db::accounts(&state.pool).await {
             Ok(accounts) => {
                 let active: HashMap<String, String> = accounts.iter()
                     .filter(|a| a.enabled && matches!(a.platform.as_str(), "telegram" | "telegram_user" | "discord" | "qq"))
@@ -56,6 +56,10 @@ pub async fn run(state: Arc<AppState>) {
                                         Ok(None) => Ok(()),
                                         Err(error) => Err(error),
                                     };
+                                    // A successful discovery means the QQ API is
+                                    // reachable; don't show "connecting" for ten minutes.
+                                    let _=set_status(&service,&id,
+                                        if result.is_ok(){"online"}else{"error"}).await;
                                     tokio::time::sleep(Duration::from_secs(600)).await;
                                     result
                                 },
