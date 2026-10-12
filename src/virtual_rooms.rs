@@ -122,6 +122,86 @@ pub fn alias(account: &str, chat: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn room_provisioning_is_idempotent_and_recovers_from_sqlite_loss() {
+        use axum::{extract::State, http::StatusCode, routing::{get,post}, Json, Router};
+        use serde_json::{json,Value};
+        use std::sync::atomic::{AtomicUsize,Ordering};
+
+        struct Mock {
+            creates: AtomicUsize,
+            expected_alias: String,
+        }
+        async fn create(
+            State(mock):State<Arc<Mock>>, Json(body):Json<Value>
+        )->(StatusCode,Json<Value>){
+            assert_eq!(body["room_alias_name"],mock.expected_alias);
+            let attempt=mock.creates.fetch_add(1,Ordering::SeqCst);
+            if attempt==0 {(StatusCode::OK,Json(json!({"room_id":"!stable:example.org"})))}
+            else {(StatusCode::CONFLICT,Json(json!({"errcode":"M_ROOM_IN_USE"})))}
+        }
+        async fn resolve()->Json<Value> {Json(json!({"room_id":"!stable:example.org"}))}
+
+        let mock=Arc::new(Mock {
+            creates:AtomicUsize::new(0),
+            expected_alias:alias("test-account","group:987"),
+        });
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let hs=format!("http://{}",listener.local_addr().unwrap());
+        let router=Router::new()
+            .route("/_matrix/client/v3/createRoom",post(create))
+            .route("/_matrix/client/v3/directory/room/{alias}",get(resolve))
+            .with_state(mock.clone());
+        let server=tokio::spawn(async move {
+            axum::serve(listener,router).await.unwrap();
+        });
+
+        let path=std::env::temp_dir().join(format!("2bm-vrooms-{}.sqlite",Uuid::new_v4()));
+        let pool=crate::db::connect(&format!("sqlite://{}",path.display())).await.unwrap();
+        sqlx::query("INSERT INTO accounts(id,platform,label,owner_mxid,credentials,enabled)
+            VALUES ('test-account','qq','test','@owner:example.org','sealed',1)")
+            .execute(&pool).await.unwrap();
+        let account=crate::db::account(&pool,"test-account").await.unwrap().unwrap();
+        let config=crate::config::Config {
+            admin_listen:"127.0.0.1:9000".parse().unwrap(),
+            matrix_listen:"127.0.0.1:9001".parse().unwrap(),
+            combined_listen:None,
+            database_url:format!("sqlite://{}",path.display()),
+            homeserver:hs,server_name:"example.org".into(),
+            as_token:"as-token".into(),hs_token:"hs-token".into(),
+            admin_token:"admin-token".into(),credential_key:[0u8;32],
+        };
+        let state=Arc::new(crate::AppState {
+            config,pool:pool.clone(),http:reqwest::Client::new(),
+            telegram:crate::telegram_user::Gateway::default(),
+            room_creation:tokio::sync::Mutex::new(()),
+        });
+        let chat=RemoteChat::new("group:987","Test Group",false,None);
+        let (first,second)=tokio::join!(
+            ensure(&state,&account,&chat,None),
+            ensure(&state,&account,&chat,None)
+        );
+        assert_eq!(first.unwrap().matrix_room,"!stable:example.org");
+        assert_eq!(second.unwrap().matrix_room,"!stable:example.org");
+        assert_eq!(mock.creates.load(Ordering::SeqCst),1);
+
+        // Crash after homeserver accepts createRoom but before SQLite persists:
+        sqlx::query("DELETE FROM mappings WHERE account_id='test-account'")
+            .execute(&state.pool).await.unwrap();
+        let recovered=ensure(&state,&account,&chat,None).await.unwrap();
+        assert_eq!(recovered.matrix_room,"!stable:example.org");
+        assert_eq!(mock.creates.load(Ordering::SeqCst),2);
+        let count:i64=sqlx::query_scalar(
+            "SELECT COUNT(*) FROM mappings WHERE account_id='test-account'")
+            .fetch_one(&state.pool).await.unwrap();
+        assert_eq!(count,1);
+
+        server.abort();
+        drop(state);
+        pool.close().await;
+        let _=std::fs::remove_file(path);
+    }
+
     #[test]
     fn alias_is_stable_scoped_and_opaque() {
         let a = alias("acct-1","group:1234");
