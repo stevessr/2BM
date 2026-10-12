@@ -170,11 +170,12 @@ mod tests {
     async fn room_provisioning_is_idempotent_and_recovers_from_sqlite_loss() {
         use axum::{extract::State, http::StatusCode, routing::{get,post}, Json, Router};
         use serde_json::{json,Value};
-        use std::sync::atomic::{AtomicUsize,Ordering};
+        use std::sync::atomic::{AtomicUsize,AtomicBool,Ordering};
 
         struct Mock {
             creates: AtomicUsize,
             expected_alias: String,
+            poisoned: AtomicBool,
         }
         async fn create(
             State(mock):State<Arc<Mock>>, Json(body):Json<Value>
@@ -185,13 +186,20 @@ mod tests {
             else {(StatusCode::CONFLICT,Json(json!({"errcode":"M_ROOM_IN_USE"})))}
         }
         async fn resolve()->Json<Value> {Json(json!({"room_id":"!stable:example.org"}))}
-        async fn bridge_state()->Json<Value> {Json(json!({
-            "network":"2bm","account_id":"test-account","external_chat":"group:987"
-        }))}
+        async fn bridge_state(State(mock):State<Arc<Mock>>)->Json<Value> {
+            Json(json!({
+                "network":"2bm",
+                "account_id":if mock.poisoned.load(Ordering::SeqCst) {
+                    "malicious-different-account"
+                } else {"test-account"},
+                "external_chat":"group:987"
+            }))
+        }
 
         let mock=Arc::new(Mock {
             creates:AtomicUsize::new(0),
             expected_alias:alias("test-account","group:987"),
+            poisoned:AtomicBool::new(false),
         });
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let hs=format!("http://{}",listener.local_addr().unwrap());
@@ -245,6 +253,18 @@ mod tests {
             "SELECT COUNT(*) FROM mappings WHERE account_id='test-account'")
             .fetch_one(&state.pool).await.unwrap();
         assert_eq!(count,1);
+
+        // A resolvable alias pointing to a room with an invalid 2BM marker
+        // must not be adopted after local mapping loss.
+        sqlx::query("DELETE FROM mappings WHERE account_id='test-account'")
+            .execute(&state.pool).await.unwrap();
+        mock.poisoned.store(true,Ordering::SeqCst);
+        let collision=ensure(&state,&account,&chat,None).await;
+        assert!(collision.is_err(),"a foreign Matrix alias was adopted");
+        let count:i64=sqlx::query_scalar(
+            "SELECT COUNT(*) FROM mappings WHERE account_id='test-account'")
+            .fetch_one(&state.pool).await.unwrap();
+        assert_eq!(count,0);
 
         server.abort();
         drop(state);
