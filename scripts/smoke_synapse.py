@@ -282,6 +282,16 @@ def main():
         assert not any(e["type"]=="m.room.message" and e["content"].get("body")==
             "Must not bridge into genuinely encrypted room"
             for e in messages(owner,second_room))
+        queue_view=api("GET",ADMIN,"/api/admin/qq-inbox",token=admin)
+        assert "Must not bridge into genuinely encrypted room" not in json.dumps(queue_view)
+        # Account deletion must fail rather than cascading away a queued
+        # message that could not safely be delivered.
+        try:
+            api("DELETE",ADMIN,f"/api/admin/accounts/{second}",token=admin)
+        except AssertionError as failure:
+            assert ": 409 " in str(failure),failure
+        else:
+            raise AssertionError("account deleted despite undelivered webhook")
 
         print("PASS Synapse/2BM/OneBot: virtual room, replies, dedup, recalls, self-first DM")
     finally:
