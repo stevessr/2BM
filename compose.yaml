@@ -1,0 +1,21 @@
+services:
+  2bm:
+    build: .
+    image: 2bm:local
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      BRIDGE_ADMIN_LISTEN: 0.0.0.0:9000
+      BRIDGE_MATRIX_LISTEN: 0.0.0.0:9001
+      BRIDGE_DATABASE_URL: sqlite:///data/2bm.sqlite
+    volumes:
+      - 2bm-data:/data
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  2bm-data:
