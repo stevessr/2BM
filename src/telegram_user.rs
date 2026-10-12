@@ -101,7 +101,8 @@ pub async fn send(state: &Arc<AppState>, account_id: &str, chat: &str, text: &st
     let client = state.telegram.live.read().await.get(account_id)
         .cloned().context("Telegram user session is not online")?;
     let resolved = client.resolve_peer(peer.to_ambient_ref()).await?;
-    let reference = resolved.to_ref().await?
+    let reference = resolved.to_ref().await
+        .map_err(|e| anyhow::anyhow!("unable to resolve peer reference: {e}"))?
         .context("Telegram peer is not accessible with this account")?;
     client.send_message(reference, text).await?;
     Ok(())
@@ -120,7 +121,7 @@ pub async fn run(state: &Arc<AppState>, account_id: &str, credentials: &Value) -
     state.telegram.live.write().await.insert(account_id.into(), client.clone());
     let mut updates = client.stream_updates(
         updates, UpdatesConfiguration { catch_up: true, ..Default::default() }
-    ).await?;
+    ).await.map_err(|e| anyhow::anyhow!("unable to initialize MTProto update stream: {e}"))?;
     let result: Result<()> = loop {
         match updates.next().await {
             Ok(Update::NewMessage(message)) if !message.outgoing() => {
