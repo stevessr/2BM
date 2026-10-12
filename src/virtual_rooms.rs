@@ -61,12 +61,19 @@ pub async fn ensure(
         db::mapping_for_chat(&state.pool, &account.id, &chat.external_chat).await? {
         existing
     } else {
+        // Room identity is the external contact, not whoever first caused an
+        // event. When another device sends first, sender_ghost represents
+        // *self* and must not become the other party in a private conversation.
         let initial_ghost = if chat.direct {
-            if let Some(ghost) = sender_ghost.as_deref() {
-                Some(ghost.to_owned())
-            } else if let Some(contact) = chat.contact_id.as_deref() {
-                Some(matrix::ghost(state, &account.id, contact, &title).await?)
-            } else { None }
+            if let Some(contact) = chat.contact_id.as_deref() {
+                if sender.is_some_and(|(id,_)| id == contact) {
+                    sender_ghost.clone()
+                } else {
+                    Some(matrix::ghost(state, &account.id, contact, &title).await?)
+                }
+            } else {
+                sender_ghost.clone()
+            }
         } else { None };
         let room = matrix::create_virtual_room(
             state, &account.id, &chat.external_chat, &title,

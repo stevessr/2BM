@@ -36,8 +36,21 @@ pub async fn incoming_with_reply(
     if already_linked.is_some() { return Ok(()); }
     let is_direct = chat.starts_with("private:") ||
         (account.platform.starts_with("telegram") && !chat.starts_with("-"));
+    let self_message=sender_id.starts_with("qq-self:") ||
+        sender_id.starts_with("telegram-self:");
+    // An own-device event cannot tell us the other contact's display name.
+    // Keep the already discovered title instead of renaming the conversation
+    // to "Me (QQ)" or "Me (Telegram)".
+    let chat_title=if is_direct && self_message {
+        sqlx::query_scalar::<_,String>(
+            "SELECT title FROM virtual_chats WHERE account_id=? AND external_chat=?")
+            .bind(account_id).bind(chat).fetch_optional(&state.pool).await?
+            .unwrap_or_else(||format!("{} · {}",account.platform,chat))
+    } else if is_direct {
+        sender.to_owned()
+    } else {chat.to_owned()};
     let descriptor = crate::virtual_rooms::RemoteChat::new(
-        chat, if is_direct { sender } else { chat },
+        chat, chat_title,
         is_direct, if is_direct {
             Some(chat.strip_prefix("private:")
                 .unwrap_or_else(||if account.platform.starts_with("telegram") {chat}else{sender_id})
