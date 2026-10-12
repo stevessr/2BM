@@ -184,7 +184,7 @@ mod tests {
             assert_eq!(body["room_alias_name"],mock.expected_alias);
             let attempt=mock.creates.fetch_add(1,Ordering::SeqCst);
             if attempt==0 {(StatusCode::OK,Json(json!({"room_id":"!stable:example.org"})))}
-            else {(StatusCode::CONFLICT,Json(json!({"errcode":"M_ROOM_IN_USE"})))}
+            else {(StatusCode::BAD_REQUEST,Json(json!({"errcode":"M_ROOM_IN_USE"})))}
         }
         async fn resolve()->Json<Value> {Json(json!({"room_id":"!stable:example.org"}))}
         async fn bridge_state(State(mock):State<Arc<Mock>>)->Json<Value> {

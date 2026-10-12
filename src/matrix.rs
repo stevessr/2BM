@@ -79,7 +79,15 @@ pub async fn create_virtual_room(
         }]
     });
     let response=request.json(&body).send().await?;
-    if response.status()==StatusCode::CONFLICT {
+    if matches!(response.status(),StatusCode::CONFLICT|StatusCode::BAD_REQUEST) {
+        // Synapse returns 400/M_ROOM_IN_USE for an existing alias; other
+        // homeservers may use 409. Check the structured errcode to avoid
+        // accidentally treating a malformed createRoom as a recovery.
+        let status=response.status();
+        let problem:Value=response.json().await?;
+        if problem["errcode"]!="M_ROOM_IN_USE" {
+            bail!("Matrix room creation {status}: {problem}");
+        }
         let lookup=state.http.get(format!("{}/_matrix/client/v3/directory/room/{}",
             state.config.homeserver,urlencoding::encode(&alias)))
             .bearer_auth(&state.config.as_token).send().await?.error_for_status()?;
