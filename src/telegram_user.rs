@@ -1,4 +1,4 @@
-use crate::{relay, AppState};
+use crate::{relay, virtual_rooms::RemoteChat, AppState};
 use anyhow::{bail, Context, Result};
 use grammers_client::{
     client::{LoginToken, PasswordToken, UpdatesConfiguration},
@@ -6,7 +6,7 @@ use grammers_client::{
     Client, SignInError,
 };
 use grammers_mtsender::SenderPool;
-use grammers_session::{storages::SqliteSession, types::PeerId};
+use grammers_session::{storages::SqliteSession, types::{PeerId, PeerKind}};
 use serde_json::Value;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::{sync::{Mutex, RwLock}, task::JoinHandle};
@@ -107,6 +107,28 @@ pub async fn send(state: &Arc<AppState>, account_id: &str, chat: &str, text: &st
     client.send_message(reference, text).await?;
     Ok(())
 }
+
+pub async fn list_chats(state: &Arc<AppState>, account_id: &str) -> Result<Vec<RemoteChat>> {
+    let client = state.telegram.live.read().await.get(account_id)
+        .cloned().context("Telegram user session is not online")?;
+    let mut iter = client.iter_dialogs();
+    let mut chats = Vec::new();
+    // Bound expensive Matrix provisioning and MTProto iteration for each sync.
+    while chats.len() < 200 {
+        let Some(dialog) = iter.next().await? else { break; };
+        let peer = dialog.peer();
+        let id = peer.id();
+        let Some(chat_id) = id.bot_api_dialog_id() else { continue; };
+        let direct = id.kind() == PeerKind::User;
+        let title = peer.name().unwrap_or("Telegram chat").to_owned();
+        chats.push(RemoteChat::new(
+            chat_id.to_string(), title, direct,
+            if direct { Some(chat_id.to_string()) } else { None }
+        ));
+    }
+    Ok(chats)
+}
+
 pub async fn run(state: &Arc<AppState>, account_id: &str, credentials: &Value) -> Result<()> {
     let path = session_path(account_id)?;
     let session = Arc::new(SqliteSession::open(path).await?);
@@ -119,6 +141,17 @@ pub async fn run(state: &Arc<AppState>, account_id: &str, credentials: &Value) -
     let mut dialogs = client.iter_dialogs();
     while let Some(_) = dialogs.next().await? {}
     state.telegram.live.write().await.insert(account_id.into(), client.clone());
+    // Existing chats become Matrix rooms even before the next external message.
+    // Run asynchronously so update processing is not blocked by Matrix requests.
+    let service = state.clone();
+    let sync_id = account_id.to_string();
+    tokio::spawn(async move {
+        if let Ok(Some(account)) = crate::db::account(&service.pool,&sync_id).await {
+            if let Err(error) = crate::virtual_rooms::sync(&service,&account,30).await {
+                tracing::warn!(account=%sync_id,%error,"Telegram virtual room discovery failed");
+            }
+        }
+    });
     let mut updates = client.stream_updates(
         updates, UpdatesConfiguration { catch_up: true, ..Default::default() }
     ).await.map_err(|e| anyhow::anyhow!("unable to initialize MTProto update stream: {e}"))?;

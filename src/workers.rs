@@ -9,7 +9,7 @@ pub async fn run(state: Arc<AppState>) {
         match db::accounts(&state.pool).await {
             Ok(accounts) => {
                 let active: HashMap<String, String> = accounts.iter()
-                    .filter(|a| a.enabled && matches!(a.platform.as_str(), "telegram" | "telegram_user" | "discord"))
+                    .filter(|a| a.enabled && matches!(a.platform.as_str(), "telegram" | "telegram_user" | "discord" | "qq"))
                     .map(|a| (a.id.clone(), format!("{}:{}", a.platform, a.credentials)))
                     .collect();
                 let stale: HashSet<_> = jobs.iter()
@@ -37,6 +37,14 @@ pub async fn run(state: Arc<AppState>) {
                                 "telegram" => adapters::telegram::poll(&service, &id, &secrets).await,
                                 "telegram_user" => crate::telegram_user::run(&service, &id, &secrets).await,
                                 "discord" => adapters::discord::gateway(&service, &id, &secrets).await,
+                                "qq" => {
+                                    let result = if let Some(account) = db::account(&service.pool, &id).await? {
+                                        crate::virtual_rooms::sync(&service, &account, 30)
+                                            .await.map(|_| ())
+                                    } else { Ok(()) };
+                                    tokio::time::sleep(Duration::from_secs(600)).await;
+                                    result
+                                },
                                 _ => break,
                             };
                             if let Err(error) = result {
