@@ -338,6 +338,12 @@ async fn delete_account(
     admin_check(&headers, &state)?;
     let account=db::account(&state.pool,&id).await.map_err(internal)?
         .ok_or_else(||error(StatusCode::NOT_FOUND,"account not found"))?;
+    let pending=db::pending_account_records(&state.pool,&id)
+        .await.map_err(internal)?;
+    if pending>0 {
+        return Err(error(StatusCode::CONFLICT,
+            "account has undelivered callbacks or uncertain outbound sends; reconcile queued messages before deleting"));
+    }
     if account.platform=="telegram_user" {
         if account.enabled {
             return Err(error(StatusCode::CONFLICT,

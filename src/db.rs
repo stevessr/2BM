@@ -189,6 +189,20 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
     Ok(db)
 }
 
+/// Count unprocessed, not-yet-acknowledged data before account deletion.
+/// SQLite cascades must never silently remove undelivered bridge messages.
+pub async fn pending_account_records(db:&SqlitePool,account:&str)->Result<i64>{
+    Ok(sqlx::query_scalar(
+        "SELECT
+            (SELECT COUNT(*) FROM qq_own_inbox WHERE account_id=?) +
+            (SELECT COUNT(*) FROM qq_events_inbox WHERE account_id=?) +
+            (SELECT COUNT(*) FROM telegram_events_inbox WHERE account_id=?) +
+            (SELECT COUNT(*) FROM delivery_attempts
+                WHERE account_id=? AND status!='delivered')")
+        .bind(account).bind(account).bind(account).bind(account)
+        .fetch_one(db).await?)
+}
+
 pub async fn accounts(db: &SqlitePool) -> Result<Vec<Account>> {
     Ok(sqlx::query_as::<_, Account>(
         "SELECT id,platform,label,owner_mxid,credentials,enabled FROM accounts ORDER BY label"
@@ -246,6 +260,29 @@ mod tests {
                 .fetch_one(&mut *conn).await.unwrap();
             assert_eq!(fks,1);
         }
+        sqlx::query("INSERT INTO accounts(id,platform,label,owner_mxid,credentials,enabled)
+            VALUES ('pending-account','qq','Test','@owner:example.org','sealed',1)")
+            .execute(&pool).await.unwrap();
+        assert_eq!(pending_account_records(&pool,"pending-account")
+            .await.unwrap(),0);
+        sqlx::query("INSERT INTO qq_events_inbox(source_key,account_id,sealed)
+            VALUES ('sample-event','pending-account','encrypted')")
+            .execute(&pool).await.unwrap();
+        assert_eq!(pending_account_records(&pool,"pending-account")
+            .await.unwrap(),1);
+        sqlx::query("DELETE FROM qq_events_inbox WHERE account_id='pending-account'")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO delivery_attempts
+            (event_key,account_id,matrix_event,external_chat,status)
+            VALUES ('send-1','pending-account','$evt','private:123','uncertain')")
+            .execute(&pool).await.unwrap();
+        assert_eq!(pending_account_records(&pool,"pending-account")
+            .await.unwrap(),1);
+        sqlx::query("UPDATE delivery_attempts SET status='delivered'
+            WHERE account_id='pending-account'")
+            .execute(&pool).await.unwrap();
+        assert_eq!(pending_account_records(&pool,"pending-account")
+            .await.unwrap(),0);
         pool.close().await;
         let _=std::fs::remove_file(path);
     }
