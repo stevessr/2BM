@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2BM | Bridge Control</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, sans-serif; background: #0c101a; color: #f1f5fc; }
+    * { box-sizing: border-box; }
+    body { margin: 0 auto; max-width: 1050px; padding: 32px 18px 70px; }
+    header { display: flex; align-items: center; gap: 18px; margin-bottom: 26px; }
+    h1 { font-size: 30px; letter-spacing: -.035em; margin: 0; }
+    h2 { margin: 0 0 18px; font-size: 18px; }
+    .muted { color: #a4b1c8; font-size: 14px; }
+    .panel { background: #171e2b; border: 1px solid #303d52; border-radius: 16px; padding: 23px; margin: 20px 0; }
+    input, select, button { font: inherit; border-radius: 8px; padding: 11px 13px; }
+    input, select { color: #f8fafc; background: #0e1521; border: 1px solid #40506a; min-width: 0; width: 100%; }
+    label { color: #bac9dd; display: grid; gap: 6px; font-size: 14px; }
+    button { border: none; background: #6da6ff; color: #081321; cursor: pointer; font-weight: 650; }
+    button.secondary { color: #e5edfa; background: #36465e; }
+    button.danger { background: #492831; color: #ffb5be; }
+    button:disabled { opacity: .5; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 13px; margin-bottom: 15px; }
+    .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .entry { border-top: 1px solid #334155; padding: 13px 0; display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+    .entry code { overflow-wrap: anywhere; }
+    #message { min-height: 24px; color: #ffcf82; }
+    code { background: #101726; padding: 2px 5px; border-radius: 4px; }
+    .hidden { display: none; }
+    footer { margin-top: 25px; font-size: 12px; color: #94a3b8; }
+    @media(max-width: 600px) { body { padding-top: 20px; } .panel { padding: 16px; } }
+  </style>
+</head>
+<body>
+  <header><div style="font-size:38px">⇄</div><div><h1>2BM Bridge Control</h1><div class="muted">Telegram · QQ/OneBot · Discord ↔ Matrix</div></div></header>
+  <section class="panel" id="login">
+    <h2>管理员登录</h2>
+    <div class="grid"><label>BRIDGE_ADMIN_TOKEN<input id="token" type="password" autocomplete="off" placeholder="输入服务器管理员令牌"></label></div>
+    <div class="row"><button id="loginButton">登录</button><span class="muted">令牌仅保存在当前浏览器标签页会话中。</span></div>
+  </section>
+  <main id="dashboard" class="hidden">
+    <div class="row"><strong>Bridge administration</strong><button id="logout" class="secondary">退出登录</button></div>
+    <section class="panel">
+      <h2>接入账号</h2>
+      <div class="grid">
+        <label>平台<select id="platform"><option value="telegram">Telegram Bot</option><option value="discord">Discord Bot</option><option value="qq">QQ via OneBot 11 / NapCat</option></select></label>
+        <label>备注名称<input id="label" placeholder="例如：我的群机器人" maxlength="100"></label>
+      </div>
+      <div id="botFields" class="grid"><label>Bot Token<input id="botToken" type="password" autocomplete="off"></label></div>
+      <div id="qqFields" class="grid hidden">
+        <label>OneBot HTTP API<input id="qqBase" placeholder="http://napcat:3000"></label>
+        <label>OneBot API Token<input id="qqApiToken" type="password"></label>
+        <label>Webhook Secret<input id="qqSecret" type="password" placeholder="单独生成随机密钥"></label>
+      </div>
+      <button id="addAccount">保存账号</button>
+      <p class="muted">Telegram 使用 BotFather Token；Discord 使用 Bot Token，须开启 MESSAGE CONTENT INTENT；QQ 登录需先在 NapCat/OneBot 完成。</p>
+      <div id="accounts"></div>
+    </section>
+    <section class="panel">
+      <h2>房间映射</h2>
+      <p class="muted">首先在 Matrix 房间邀请 <code>@_2bm:你的服务器域名</code>，然后添加下面的映射。</p>
+      <div class="grid">
+        <label>账号<select id="accountSelection"></select></label>
+        <label>外部聊天 ID<input id="externalChat" placeholder="Telegram -100... / Discord 频道 ID / QQ group:123"></label>
+        <label>Matrix 房间 ID<input id="matrixRoom" placeholder="!roomId:example.org"></label>
+      </div>
+      <button id="addMapping">添加映射</button>
+      <div id="mappings"></div>
+    </section>
+  </main>
+  <p id="message" role="status"></p>
+  <footer>2BM 0.1 · 所有后台 API 均要求管理员 Bearer Token · 建议通过 HTTPS 反向代理访问后台</footer>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let token = sessionStorage.getItem('two_bm_admin') || '';
+  let accounts = [];
+
+  async function api(path, options = {}) {
+    const response = await fetch('/api/admin/' + path, {
+      ...options,
+      headers: { 'Authorization': 'Bearer ' + token, ...(options.body ? {'Content-Type':'application/json'} : {}) },
+      cache: 'no-store'
+    });
+    if (response.status === 204) return null;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || ('HTTP ' + response.status));
+    return result;
+  }
+  function showMessage(err) { $('message').textContent = err ? String(err.message || err) : ''; }
+  function setLoggedIn(yes) {
+    $('login').classList.toggle('hidden', yes);
+    $('dashboard').classList.toggle('hidden', !yes);
+  }
+  async function refresh() {
+    accounts = await api('accounts');
+    const mappings = await api('mappings');
+    $('accounts').replaceChildren();
+    $('accountSelection').replaceChildren();
+    for (const account of accounts) {
+      const option = document.createElement('option');
+      option.value = account.id;
+      option.textContent = account.label + ' (' + account.platform + ')';
+      $('accountSelection').append(option);
+      addRow($('accounts'), account.label + ' · ' + account.platform + ' · ' + account.id,
+        () => remove('accounts/', account.id));
+    }
+    $('mappings').replaceChildren();
+    for (const mapping of mappings) {
+      const account = accounts.find(a => a.id === mapping.account_id);
+      addRow($('mappings'), (account ? account.label : mapping.account_id) +
+        ' · ' + mapping.external_chat + ' → ' + mapping.matrix_room,
+        () => remove('mappings/', mapping.id));
+    }
+  }
+  function addRow(container, title, onDelete) {
+    const row = document.createElement('div');
+    row.className = 'entry';
+    const content = document.createElement('span');
+    content.textContent = title;
+    const button = document.createElement('button');
+    button.className = 'danger';
+    button.textContent = '删除';
+    button.addEventListener('click', onDelete);
+    row.append(content, button);
+    container.append(row);
+  }
+  async function remove(resource, id) {
+    if (!confirm('确定删除？关联数据可能会被级联删除。')) return;
+    try { await api(resource + id, {method:'DELETE'}); await refresh(); showMessage(); }
+    catch (err) { showMessage(err); }
+  }
+  async function login() {
+    token = $('token').value || token;
+    try {
+      await api('accounts');
+      sessionStorage.setItem('two_bm_admin', token);
+      $('token').value = '';
+      setLoggedIn(true);
+      await refresh();
+      showMessage();
+    } catch (err) { showMessage(err); }
+  }
+  $('loginButton').addEventListener('click', login);
+  $('logout').addEventListener('click', () => {
+    token = ''; sessionStorage.removeItem('two_bm_admin'); setLoggedIn(false);
+  });
+  $('platform').addEventListener('change', () => {
+    const isQq = $('platform').value === 'qq';
+    $('qqFields').classList.toggle('hidden', !isQq);
+    $('botFields').classList.toggle('hidden', isQq);
+  });
+  $('addAccount').addEventListener('click', async () => {
+    try {
+      const platform = $('platform').value;
+      const credentials = platform === 'qq'
+        ? {api_base: $('qqBase').value.trim(), access_token: $('qqApiToken').value, hook_secret: $('qqSecret').value}
+        : {token: $('botToken').value};
+      await api('accounts', {method:'POST', body:JSON.stringify({platform, label:$('label').value, credentials})});
+      for (const field of ['botToken','qqApiToken','qqSecret']) $(field).value = '';
+      await refresh(); showMessage();
+    } catch(err) { showMessage(err); }
+  });
+  $('addMapping').addEventListener('click', async () => {
+    try {
+      await api('mappings', {method:'POST', body:JSON.stringify({
+        account_id:$('accountSelection').value,
+        external_chat:$('externalChat').value.trim(),
+        matrix_room:$('matrixRoom').value.trim()
+      })});
+      await refresh(); showMessage();
+    } catch(err) { showMessage(err); }
+  });
+  if (token) login();
+})();
+</script>
+</body>
+</html>
