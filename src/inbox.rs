@@ -334,6 +334,27 @@ mod tests {
             .fetch_one(&state.pool).await.unwrap();
         assert_eq!(retries,1);
 
+        // MTProto updates are independently deduplicated and encrypted even
+        // when the account is temporarily disabled.
+        sqlx::query("INSERT INTO accounts(id,platform,label,owner_mxid,credentials,enabled)
+            VALUES ('tg','telegram_user','TG','@owner:example.org','encrypted',0)")
+            .execute(&state.pool).await.unwrap();
+        enqueue_telegram(&state,"tg","123","99","123","Contact",
+            "private Telegram message",false,Some("98")).await.unwrap();
+        enqueue_telegram(&state,"tg","123","99","123","Contact",
+            "private Telegram message",false,Some("98")).await.unwrap();
+        assert_eq!(telegram_pending_count(&state).await.unwrap(),1);
+        let telegram_payload:String=sqlx::query_scalar(
+            "SELECT sealed FROM telegram_events_inbox WHERE account_id='tg'")
+            .fetch_one(&state.pool).await.unwrap();
+        assert!(!telegram_payload.contains("private Telegram message"));
+        let decrypted=crypto::decrypt(&state.config.credential_key,
+            &telegram_payload).unwrap();
+        assert_eq!(decrypted["reply_to"],"98");
+        assert_eq!(decrypted["text"],"private Telegram message");
+        assert_eq!(drain_telegram(&state,10).await.unwrap(),0);
+        assert_eq!(telegram_pending_count(&state).await.unwrap(),1);
+
         state.pool.close().await;
         drop(state);
         let _=std::fs::remove_file(path);
