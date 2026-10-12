@@ -322,6 +322,11 @@ pub async fn run(state: &Arc<AppState>, account_id: &str, credentials: &Value) -
     let mut updates = client.stream_updates(
         updates, UpdatesConfiguration { catch_up: true, ..Default::default() }
     ).await.map_err(|e| anyhow::anyhow!("unable to initialize MTProto update stream: {e}"))?;
+    // Update state is safe to persist only after all consumed updates are
+    // durably accepted by the encrypted inbox. A failed SQLite insertion
+    // must not advance Telegram's source cursor.
+    let mut safe_to_sync=true;
+    let mut uncheckpointed=0u32;
     let result: Result<()> = loop {
         match updates.next().await {
             Ok(Update::NewMessage(message)) => {
@@ -345,7 +350,15 @@ pub async fn run(state: &Arc<AppState>, account_id: &str, credentials: &Value) -
                         message.text(),outgoing,reply_id.as_deref()).await {
                         // Never intentionally advance stream state past a
                         // message that has not been durably written.
+                        safe_to_sync=false;
                         break Err(error);
+                    }
+                    uncheckpointed+=1;
+                    if uncheckpointed>=64 {
+                        if let Err(error)=updates.sync_update_state().await {
+                            break Err(error.into());
+                        }
+                        uncheckpointed=0;
                     }
                 }
             }
@@ -354,9 +367,12 @@ pub async fn run(state: &Arc<AppState>, account_id: &str, credentials: &Value) -
         }
     };
     state.telegram.live.write().await.remove(account_id);
-    if result.is_ok() {
+    // A network error after durable enqueues is still safe to checkpoint.
+    // Only an unsuccessful enqueue forbids saving the consumed cursor.
+    if safe_to_sync {
         if let Err(error)=updates.sync_update_state().await {
-            tracing::warn!(%error,"unable to persist Telegram update state");
+            tracing::warn!(%error,
+                "unable to persist Telegram update state after disconnect");
         }
     }
     handle.quit();
