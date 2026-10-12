@@ -356,7 +356,7 @@ pub async fn run(state: &Arc<AppState>, account_id: &str, credentials: &Value) -
                     uncheckpointed+=1;
                     if uncheckpointed>=64 {
                         if let Err(error)=updates.sync_update_state().await {
-                            break Err(error.into());
+                            break Err(anyhow::anyhow!("Telegram update state checkpoint failed: {error}"));
                         }
                         uncheckpointed=0;
                     }
