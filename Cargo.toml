@@ -16,6 +16,9 @@ futures-util = "0.3"
 grammers-client = "0.10.0"
 grammers-mtsender = "0.10.0"
 grammers-session = "0.10.0"
+# grammers-crypto 0.10 relies on the prerelease rc0 glass_pumpkin API.
+# rc1 changes both BigUint and safe_prime::check signatures.
+glass_pumpkin = "=2.0.0-rc0"
 hex = "0.4"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
