@@ -21,11 +21,21 @@ pub async fn incoming(
     ).bind(account_id).bind(chat).bind(message_id)
         .fetch_optional(&state.pool).await?;
     if recalled.is_some() { return Ok(()); }
+    // Matrix-originated messages are already in the room as their owner.
+    // Do not emit a second ghost event when NapCat/MTProto echoes them.
+    let already_linked:Option<i64>=sqlx::query_scalar(
+        "SELECT 1 FROM event_links WHERE account_id=? AND external_chat=? AND external_message=?")
+        .bind(account_id).bind(chat).bind(message_id).fetch_optional(&state.pool).await?;
+    if already_linked.is_some() { return Ok(()); }
     let is_direct = chat.starts_with("private:") ||
         (account.platform.starts_with("telegram") && !chat.starts_with("-"));
     let descriptor = crate::virtual_rooms::RemoteChat::new(
         chat, if is_direct { sender } else { chat },
-        is_direct, if is_direct { Some(sender_id.to_owned()) } else { None }
+        is_direct, if is_direct {
+            Some(chat.strip_prefix("private:")
+                .unwrap_or_else(||if account.platform.starts_with("telegram") {chat}else{sender_id})
+                .to_owned())
+        } else { None }
     );
     let mapping = crate::virtual_rooms::ensure(
         state, &account, &descriptor, Some((sender_id,sender))
@@ -47,6 +57,16 @@ pub async fn incoming(
     ).bind(account_id).bind(chat).bind(message_id).fetch_optional(&state.pool).await?;
     if recalled.is_some() { recall(state,account_id,chat,message_id).await?; }
     Ok(())
+}
+
+/// For outgoing messages observed on another device, serialize against
+/// Matrix -> platform sends so the message-ID mapping is committed first.
+pub async fn incoming_own(
+    state:&Arc<AppState>,account_id:&str,chat:&str,message_id:&str,
+    sender_id:&str,sender:&str,text:&str
+)->Result<()>{
+    let _delivery=state.delivery_lock.lock().await;
+    incoming(state,account_id,chat,message_id,sender_id,sender,text).await
 }
 
 /// OneBot recall events are idempotent and may arrive before their messages.
@@ -109,6 +129,7 @@ pub async fn matrix_event(state: &Arc<AppState>, event: &Value) -> Result<()> {
     let reply_event=event["content"]["m.relates_to"]["m.in_reply_to"]["event_id"].as_str();
     let body=strip_reply_fallback(raw_body,reply_event.is_some());
     for mapping in db::mappings_for_room(&state.pool,room).await? {
+        let _delivery=state.delivery_lock.lock().await;
         let key = format!("{event_id}:{}",mapping.id);
         if db::has_key(&state.pool,"outgoing","event_key",&key).await? { continue; }
         let Some(account) = db::account(&state.pool,&mapping.account_id).await? else { continue; };
@@ -125,14 +146,25 @@ pub async fn matrix_event(state: &Arc<AppState>, event: &Value) -> Result<()> {
                 .bind(room).bind(reply_event)
                 .fetch_optional(&state.pool).await?
         } else {None};
-        if account.platform=="qq" {
-            let secrets=adapters::credentials(state,&account)?;
-            crate::adapters::qq::send_reply(state,&secrets,&mapping.external_chat,
-                body,remote_reply.as_deref()).await?;
-        } else {
-            adapters::send(state,&account,&mapping.external_chat,body).await?;
+        let remote_sent:Option<String>=match account.platform.as_str() {
+            "qq" => {
+                let secrets=adapters::credentials(state,&account)?;
+                crate::adapters::qq::send_reply_id(
+                    state,&secrets,&mapping.external_chat,body,
+                    remote_reply.as_deref()).await?
+            }
+            "telegram_user" => Some(crate::telegram_user::send_with_id(
+                state,&account.id,&mapping.external_chat,body).await?.to_string()),
+            _ => {adapters::send(state,&account,&mapping.external_chat,body).await?;None}
+        };
+        if let Some(remote_id)=remote_sent {
+            sqlx::query("INSERT OR IGNORE INTO event_links
+                (account_id,external_chat,external_message,matrix_room,matrix_event,sender_mxid)
+                VALUES (?,?,?,?,?,?)")
+                .bind(&account.id).bind(&mapping.external_chat).bind(&remote_id)
+                .bind(room).bind(event_id).bind(sender).execute(&state.pool).await?;
         }
-        sqlx::query("INSERT OR IGNORE INTO outgoing(event_key) VALUES (?)")
+        sqlx::query("INSERT OR IGNORE INTO outgoing(event_key) VALUES (?)
             .bind(key).execute(&state.pool).await?;
     }
     Ok(())
@@ -181,6 +213,7 @@ mod tests {
             http:reqwest::Client::new(),
             telegram:crate::telegram_user::Gateway::default(),
             room_creation:tokio::sync::Mutex::new(()),
+            delivery_lock:tokio::sync::Mutex::new(()),
         });
         (state,counter,task,path)
     }

@@ -95,6 +95,9 @@ pub async fn verify(
     Ok("ready")
 }
 pub async fn send(state: &Arc<AppState>, account_id: &str, chat: &str, text: &str) -> Result<()> {
+    send_with_id(state,account_id,chat,text).await.map(|_|())
+}
+pub async fn send_with_id(state: &Arc<AppState>, account_id: &str, chat: &str, text: &str) -> Result<i32> {
     let chat_id: i64 = chat.parse().context("invalid Telegram chat ID")?;
     let peer = PeerId::from_bot_api_dialog_id(chat_id)
         .context("invalid Telegram peer ID")?;
@@ -104,8 +107,8 @@ pub async fn send(state: &Arc<AppState>, account_id: &str, chat: &str, text: &st
     let reference = resolved.to_ref().await
         .map_err(|e| anyhow::anyhow!("unable to resolve peer reference: {e}"))?
         .context("Telegram peer is not accessible with this account")?;
-    client.send_message(reference, text).await?;
-    Ok(())
+    let message=client.send_message(reference, text).await?;
+    Ok(message.id())
 }
 
 pub async fn list_chats(state: &Arc<AppState>, account_id: &str) -> Result<Vec<RemoteChat>> {
@@ -219,18 +222,23 @@ pub async fn run(state: &Arc<AppState>, account_id: &str, credentials: &Value) -
     ).await.map_err(|e| anyhow::anyhow!("unable to initialize MTProto update stream: {e}"))?;
     let result: Result<()> = loop {
         match updates.next().await {
-            Ok(Update::NewMessage(message)) if !message.outgoing() => {
+            Ok(Update::NewMessage(message)) => {
                 if let Some(chat) = message.peer_id().bot_api_dialog_id() {
-                    let sender = message.sender()
-                        .and_then(|p| p.name())
-                        .unwrap_or("Telegram contact");
-                    let sender_id = message.sender_id()
-                        .and_then(|p| p.bot_api_dialog_id())
-                        .unwrap_or(chat);
-                    if let Err(e) = relay::incoming(
-                        state, account_id, &chat.to_string(), &message.id().to_string(),
-                        &sender_id.to_string(), sender, message.text()
-                    ).await {
+                    let chat_str=chat.to_string();
+                    let msg=message.id().to_string();
+                    let result=if message.outgoing() {
+                        relay::incoming_own(state,account_id,&chat_str,&msg,
+                            &format!("telegram-self:{account_id}"),
+                            "Me (Telegram)",message.text()).await
+                    } else {
+                        let sender=message.sender().and_then(|p|p.name())
+                            .unwrap_or("Telegram contact");
+                        let sender_id=message.sender_id()
+                            .and_then(|p|p.bot_api_dialog_id()).unwrap_or(chat);
+                        relay::incoming(state,account_id,&chat_str,&msg,
+                            &sender_id.to_string(),sender,message.text()).await
+                    };
+                    if let Err(e)=result {
                         tracing::warn!(account=%account_id,%e,"MTProto event relaying failed");
                     }
                 }

@@ -441,8 +441,15 @@ async fn qq_hook(
         }
         return Ok(Json(json!({})));
     }
-    if body["post_type"] != "message" { return Ok(Json(json!({}))); }
-    let Some(chat) = adapters::qq::chat_id(&body) else { return Ok(Json(json!({}))); };
+    if !matches!(body["post_type"].as_str(),Some("message"|"message_sent")) {
+        return Ok(Json(json!({})));
+    }
+    let own = body["post_type"]=="message_sent"
+        || body["user_id"].as_i64().zip(body["self_id"].as_i64())
+            .is_some_and(|(user,self_id)|user==self_id);
+    let chat=if own {adapters::qq::own_chat_id(&body)}
+        else {adapters::qq::chat_id(&body)};
+    let Some(chat)=chat else {return Ok(Json(json!({})));};
     let message_id = body["message_id"].as_str()
         .map(str::to_owned)
         .or_else(|| body["message_id"].as_i64().map(|n| n.to_string()))
@@ -457,8 +464,14 @@ async fn qq_hook(
     let text = body["raw_message"].as_str()
         .or_else(|| body["message"].as_str())
         .unwrap_or_default();
-    relay::incoming(&state, &account_id, &chat, &message_id, &sender_id, sender, text)
-        .await.map_err(internal)?;
+    if own {
+        relay::incoming_own(&state,&account_id,&chat,&message_id,
+            &format!("qq-self:{account_id}"),"Me (QQ)",text)
+            .await.map_err(internal)?;
+    } else {
+        relay::incoming(&state,&account_id,&chat,&message_id,&sender_id,sender,text)
+            .await.map_err(internal)?;
+    }
     Ok(Json(json!({})))
 }
 

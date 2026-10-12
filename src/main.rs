@@ -22,6 +22,8 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub telegram: telegram_user::Gateway,
     pub room_creation: tokio::sync::Mutex<()>,
+    /// Serializes outbound remote sends against inbound self-message echoes.
+    pub delivery_lock: tokio::sync::Mutex<()>,
 }
 
 #[tokio::main]
@@ -43,7 +45,7 @@ async fn main() -> Result<()> {
         .timeout(Duration::from_secs(35))
         .user_agent("2BM/0.1")
         .build()?;
-    let state = Arc::new(AppState { config, pool, http, telegram: telegram_user::Gateway::default(), room_creation: tokio::sync::Mutex::new(()) });
+    let state = Arc::new(AppState { config, pool, http, telegram: telegram_user::Gateway::default(), room_creation: tokio::sync::Mutex::new(()), delivery_lock: tokio::sync::Mutex::new(()) });
 
     // A service that serves 200 /healthz without a functional appservice
     // silently loses messages. Fail startup until the homeserver registration

@@ -18,6 +18,12 @@ pub async fn send_reply(
     state: &Arc<AppState>, credentials: &Value, chat: &str,
     text: &str, reply_to: Option<&str>
 ) -> Result<()> {
+    send_reply_id(state,credentials,chat,text,reply_to).await.map(|_|())
+}
+pub async fn send_reply_id(
+    state: &Arc<AppState>, credentials: &Value, chat: &str,
+    text: &str, reply_to: Option<&str>
+) -> Result<Option<String>> {
     let api_base = token(credentials, "api_base")?.trim_end_matches('/');
     let (kind, id) = chat.split_once(':')
         .context("QQ chat must use group:<id> or private:<id>")?;
@@ -44,7 +50,8 @@ pub async fn send_reply(
     if result["status"] != "ok" && result["retcode"] != 0 {
         bail!("OneBot API rejected message: {}", result["retcode"]);
     }
-    Ok(())
+    Ok(result["data"]["message_id"].as_i64().map(|id|id.to_string())
+        .or_else(||result["data"]["message_id"].as_str().map(str::to_owned)))
 }
 
 
@@ -199,6 +206,22 @@ pub fn recall_target(event:&Value)->Option<(String,String)>{
     Some((chat,msg))
 }
 
+/// NapCat includes message_sent for messages sent from the logged-in QQ
+/// account, including another device. A private sent chat uses target_id.
+pub fn own_chat_id(event:&Value)->Option<String>{
+    let self_id=event["self_id"].as_i64()?;
+    let sender=event["user_id"].as_i64()?;
+    if self_id!=sender {return None;}
+    match event["message_type"].as_str()? {
+        "group" => event["group_id"].as_i64()
+            .or_else(||event["target_id"].as_i64())
+            .map(|id|format!("group:{id}")),
+        "private" => event["target_id"].as_i64()
+            .map(|id|format!("private:{id}")),
+        _=>None,
+    }
+}
+
 pub fn chat_id(event: &Value) -> Option<String> {
     match event["message_type"].as_str()? {
         "group" => event["group_id"].as_i64().map(|id| format!("group:{id}")),
@@ -232,6 +255,17 @@ mod tests {
         assert_eq!(recall_target(&json!({"notice_type":"friend_recall","user_id":99,"message_id":12})),
             Some(("private:99".into(),"12".into())));
         assert_eq!(recall_target(&json!({"notice_type":"poke","user_id":99,"message_id":12})),None);
+    }
+    #[test]
+    fn classify_sent_messages_without_self_to_self_dm() {
+        let group=json!({"post_type":"message_sent","message_type":"group",
+            "self_id":12,"user_id":12,"group_id":34,"message_id":54});
+        let dm=json!({"post_type":"message_sent","message_type":"private",
+            "self_id":12,"user_id":12,"target_id":87,"message_id":55});
+        assert_eq!(own_chat_id(&group),Some("group:34".into()));
+        assert_eq!(own_chat_id(&dm),Some("private:87".into()));
+        assert_eq!(own_chat_id(&json!({"self_id":12,"user_id":88,
+            "message_type":"private","target_id":87})),None);
     }
     #[test]
     fn classify_onebot_chats() {
