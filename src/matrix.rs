@@ -180,11 +180,17 @@ pub async fn set_virtual_room_name(
 }
 /// Reject attaching an existing encrypted Matrix room to a plaintext bridge.
 /// Matrix E2EE cannot be disabled on the room after activation.
-pub async fn require_unencrypted(state:&Arc<AppState>,room:&str)->Result<()> {
-    let result=state.http.get(format!(
+pub async fn require_unencrypted(
+    state:&Arc<AppState>,room:&str,as_user:Option<&str>
+)->Result<()> {
+    let request=state.http.get(format!(
         "{}/_matrix/client/v3/rooms/{}/state/m.room.encryption",
         state.config.homeserver,urlencoding::encode(room)))
-        .bearer_auth(&state.config.as_token).send().await?;
+        .bearer_auth(&state.config.as_token);
+    let request=if let Some(as_user)=as_user {
+        request.query(&[("user_id",as_user)])
+    }else{request};
+    let result=request.send().await?;
     if result.status()==StatusCode::NOT_FOUND {
         return Ok(());
     }
@@ -202,6 +208,10 @@ pub async fn send_as_reply(
     state:&Arc<AppState>,room:&str,body:&str,txn:&str,mxid:&str,
     reply_to:Option<&str>
 )->Result<String>{
+    // Do not rely solely on streamed m.room.encryption notifications:
+    // encryption could have been enabled before a crash/DB restore.
+    // Fail closed if the homeserver cannot verify current room state.
+    require_unencrypted(state,room,Some(mxid)).await?;
     let mut content=json!({"msgtype":"m.text","body":body});
     if let Some(reply)=reply_to {
         content["m.relates_to"]=json!({"m.in_reply_to":{"event_id":reply}});

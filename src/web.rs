@@ -438,7 +438,7 @@ async fn create_mapping(
     if !valid_chat {
         return Err(error(StatusCode::BAD_REQUEST, "invalid external chat ID for this platform"));
     }
-    matrix::require_unencrypted(&state,&request.matrix_room).await
+    matrix::require_unencrypted(&state,&request.matrix_room,None).await
         .map_err(|err|error(StatusCode::UNPROCESSABLE_ENTITY,&err.to_string()))?;
     let mapping: db::Mapping = sqlx::query_as(
         "INSERT INTO mappings(account_id,external_chat,matrix_room) VALUES (?,?,?)
