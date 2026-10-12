@@ -77,7 +77,11 @@ pub async fn begin(state: &Arc<AppState>, account_id: &str, phone: &str) -> Resu
     let SenderPool { runner, handle, .. } = SenderPool::new(session, api_id(&creds)?);
     let client = Client::new(handle);
     let runner = tokio::spawn(async move { let _ = runner.run().await; });
-    if client.is_authorized().await? {
+    let authorized=match client.is_authorized().await {
+        Ok(auth)=>auth,
+        Err(error)=>{runner.abort();return Err(error.into());}
+    };
+    if authorized {
         sqlx::query("UPDATE accounts SET enabled = 1 WHERE id = ?")
             .bind(account_id).execute(&state.pool).await?;
         runner.abort();
@@ -113,9 +117,19 @@ pub async fn verify(
             }
         }
         LoginPhase::Password(password) => {
-            pending.client.check_password(password, value).await
-                .map(|_| "ready")
-                .map_err(|e| anyhow::anyhow!("Telegram 2FA verification failed: {e}"))
+            match pending.client.check_password(password, value).await {
+                Ok(_) => Ok("ready"),
+                Err(SignInError::InvalidPassword(next_token)) => {
+                    pending.phase=LoginPhase::Password(next_token);
+                    state.telegram.pending.lock().await
+                        .insert(account_id.to_owned(),pending);
+                    return Err(anyhow::anyhow!("incorrect Telegram 2FA password; try again"));
+                }
+                Err(error) => {
+                    pending.runner.abort();
+                    return Err(anyhow::anyhow!("Telegram 2FA verification failed: {error}"));
+                }
+            }
         }
     };
     result?;
