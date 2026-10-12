@@ -10,8 +10,9 @@ pub async fn send(state: &Arc<AppState>, credentials: &Value, chat: &str, text: 
     let response = state.http
         .post(format!("https://api.telegram.org/bot{bot_token}/sendMessage"))
         .json(&json!({"chat_id": chat_id, "text": text}))
-        .send().await?
-        .error_for_status()?;
+        .send().await.map_err(|_|anyhow::anyhow!("Telegram Bot API send failed"))?
+        .error_for_status().map_err(|error|
+            anyhow::anyhow!("Telegram Bot API HTTP {:?}",error.status()))?;
     let result: Value = response.json().await?;
     if result["ok"] != true { bail!("Telegram rejected sendMessage"); }
     Ok(())

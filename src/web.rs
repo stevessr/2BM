@@ -30,6 +30,7 @@ pub fn admin_router() -> Router<Arc<AppState>> {
         .route("/api/admin/accounts/{id}/sync", post(sync_virtual_rooms))
         .route("/api/admin/virtual-rooms", get(list_virtual_rooms))
         .route("/api/admin/delivery-issues",get(list_delivery_issues))
+        .route("/api/admin/room-warnings",get(list_room_warnings))
         .route("/api/admin/delivery-issues/resolve",post(resolve_delivery_issue))
         .route("/api/admin/accounts/{id}/qq/members",post(sync_qq_members))
         .route("/api/admin/mappings", get(list_mappings).post(create_mapping))
@@ -94,6 +95,26 @@ fn internal(err: impl std::fmt::Display) -> ApiError {
     error(StatusCode::INTERNAL_SERVER_ERROR, "internal service error")
 }
 
+
+
+#[derive(serde::Serialize,sqlx::FromRow)]
+struct RoomWarning {
+    matrix_room:String,
+    reason:String,
+    event_count:i64,
+    first_seen:String,
+    last_seen:String,
+}
+async fn list_room_warnings(
+    State(state):State<Arc<AppState>>,headers:HeaderMap
+)->ApiResult<Json<Value>> {
+    admin_check(&headers,&state)?;
+    let warnings:Vec<RoomWarning>=sqlx::query_as(
+        "SELECT matrix_room,reason,event_count,first_seen,last_seen
+         FROM room_warnings ORDER BY last_seen DESC LIMIT 200")
+        .fetch_all(&state.pool).await.map_err(internal)?;
+    Ok(Json(json!(warnings)))
+}
 
 async fn list_delivery_issues(
     State(state):State<Arc<AppState>>,headers:HeaderMap

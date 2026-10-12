@@ -106,6 +106,20 @@ fn strip_reply_fallback<'a>(text:&'a str,is_reply:bool)->&'a str {
 }
 pub async fn matrix_event(state: &Arc<AppState>, event: &Value) -> Result<()> {
     let kind = event["type"].as_str().unwrap_or_default();
+    if matches!(kind,"m.room.encrypted"|"m.room.encryption") {
+        if let Some(room)=event["room_id"].as_str() {
+            if !db::mappings_for_room(&state.pool,room).await?.is_empty() {
+                sqlx::query("INSERT INTO room_warnings(matrix_room,reason)
+                    VALUES (?,'e2ee_unsupported')
+                    ON CONFLICT(matrix_room) DO UPDATE SET
+                        event_count=room_warnings.event_count+1,
+                        last_seen=CURRENT_TIMESTAMP")
+                    .bind(room).execute(&state.pool).await?;
+                tracing::error!(room,"encrypted Matrix bridge room is unsupported; message not relayed");
+            }
+        }
+        return Ok(());
+    }
     if kind == "m.room.member" {
         if let (Some(room),Some(member))=(
             event["room_id"].as_str(),event["state_key"].as_str()
@@ -127,6 +141,15 @@ pub async fn matrix_event(state: &Arc<AppState>, event: &Value) -> Result<()> {
         return Ok(());
     }
     if kind != "m.room.message" { return Ok(()); }
+    if let Some(room)=event["room_id"].as_str() {
+        let blocked:Option<i64>=sqlx::query_scalar(
+            "SELECT 1 FROM room_warnings WHERE matrix_room=? AND reason='e2ee_unsupported'"
+        ).bind(room).fetch_optional(&state.pool).await?;
+        if blocked.is_some() {
+            // Never attempt to forward plaintext from a room flagged encrypted.
+            return Ok(());
+        }
+    }
     let Some(sender) = event["sender"].as_str() else { return Ok(()); };
     if sender == state.config.bot_user() || sender.starts_with("@_2bm_p_") { return Ok(()); }
     if !matches!(event["content"]["msgtype"].as_str(),Some("m.text"|"m.emote")) { return Ok(()); }

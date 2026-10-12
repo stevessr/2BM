@@ -75,6 +75,13 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
         "CREATE TABLE IF NOT EXISTS incoming (
             source_key TEXT PRIMARY KEY, delivered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",
+        "CREATE TABLE IF NOT EXISTS room_warnings (
+            matrix_room TEXT PRIMARY KEY,
+            reason TEXT NOT NULL,
+            event_count INTEGER NOT NULL DEFAULT 1,
+            first_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
         "CREATE TABLE IF NOT EXISTS ghost_room_memberships (
             matrix_room TEXT NOT NULL,
             ghost_mxid TEXT NOT NULL,

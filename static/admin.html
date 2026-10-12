@@ -99,6 +99,11 @@
       <button id="qqMembers">同步群成员</button>
     </section>
     <section class="panel">
+      <h2>Matrix 加密兼容性警告</h2>
+      <p class="muted">2BM 暂不支持 Matrix 端到端加密。若客户端将桥接房间设为加密，相关消息无法正确转发。请停止使用该房间，在 Matrix 客户端新建未加密房间并重新配置映射。</p>
+      <div id="roomWarnings"></div>
+    </section>
+    <section class="panel">
       <h2>发送故障与人工核对</h2>
       <p class="muted">网络超时后，外部平台可能已经收到消息。为避免重复，2BM 会暂停这条消息的自动重试。请先在对应 QQ/Telegram 会话中检查消息：确认未发送再选“重试”，确认已发送则选“标记已送达”。操作有风险，不会自行判断平台是否收到。</p>
       <div id="deliveryIssues"></div>
@@ -145,6 +150,7 @@
     const mappings = await api('mappings');
     const virtualRooms = await api('virtual-rooms');
     const deliveryIssues = await api('delivery-issues');
+    const roomWarnings = await api('room-warnings');
     $('accounts').replaceChildren();
     $('accountSelection').replaceChildren();
     $('tgAccount').replaceChildren();
@@ -196,6 +202,13 @@
         row.append(status);
       }
       $('virtualRooms').append(row);
+    }
+    $('roomWarnings').replaceChildren();
+    for (const warning of roomWarnings) {
+      const row=document.createElement('p');
+      row.textContent=warning.matrix_room+' · 不支持加密 · 事件数 '+warning.event_count+
+        ' · '+warning.last_seen;
+      $('roomWarnings').append(row);
     }
     $('deliveryIssues').replaceChildren();
     if (!deliveryIssues.length) {
