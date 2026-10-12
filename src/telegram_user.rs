@@ -124,6 +124,43 @@ pub async fn verify(
     pending.runner.abort();
     Ok("ready")
 }
+
+pub async fn logout(state:&Arc<AppState>,account_id:&str)->Result<()> {
+    let account=crate::db::account(&state.pool,account_id).await?
+        .filter(|a|a.platform=="telegram_user")
+        .context("Telegram personal account not found")?;
+    if !account.enabled { return Ok(()); }
+    let client=state.telegram.live.read().await.get(account_id).cloned()
+        .context("Telegram account must be online to revoke the remote session")?;
+    tokio::time::timeout(std::time::Duration::from_secs(20),client.sign_out())
+        .await.context("Telegram logout timed out; remote outcome is unknown")??;
+    sqlx::query("UPDATE accounts SET enabled=0 WHERE id=?")
+        .bind(account_id).execute(&state.pool).await?;
+    client.disconnect();
+    state.telegram.live.write().await.remove(account_id);
+    Ok(())
+}
+
+pub async fn purge_local_session(state:&Arc<AppState>,account_id:&str)->Result<()> {
+    if let Some(pending)=state.telegram.pending.lock().await.remove(account_id) {
+        pending.runner.abort();
+    }
+    let path=session_path(account_id)?;
+    let files=[
+        path.clone(),
+        std::path::PathBuf::from(format!("{}-wal",path.display())),
+        std::path::PathBuf::from(format!("{}-shm",path.display())),
+    ];
+    for file in files {
+        match tokio::fs::remove_file(&file).await {
+            Ok(())=>{},
+            Err(err) if err.kind()==std::io::ErrorKind::NotFound=>{},
+            Err(err)=>return Err(err.into()),
+        }
+    }
+    Ok(())
+}
+
 pub async fn send(state: &Arc<AppState>, account_id: &str, chat: &str, text: &str) -> Result<()> {
     send_with_id(state,account_id,chat,text).await.map(|_|())
 }
