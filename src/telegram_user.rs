@@ -100,7 +100,7 @@ pub async fn verify(
 ) -> Result<&'static str> {
     let mut pending = state.telegram.pending.lock().await.remove(account_id)
         .context("No pending Telegram authentication; request a code first")?;
-    let result = match pending.phase {
+    let result: Result<&'static str> = match pending.phase {
         LoginPhase::Code(token) => {
             match pending.client.sign_in(&token, value).await {
                 Ok(_) => Ok("ready"),
