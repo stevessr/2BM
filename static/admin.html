@@ -70,7 +70,7 @@
         <label>Telegram 验证码<input id="tgCode" autocomplete="one-time-code"></label>
         <label>两步验证密码（需要时）<input id="tgPassword" type="password" autocomplete="off"></label>
       </div>
-      <div class="row"><button id="tgVerify">提交验证码</button><button id="tg2fa" class="secondary">提交两步验证密码</button></div>
+      <div class="row"><button id="tgVerify">提交验证码</button><button id="tg2fa" class="secondary">提交两步验证密码</button><button id="tgLogout" class="danger">登出并撤销 Telegram 授权</button></div>
       <h2 style="margin-top:25px">最近消息导入（手动）</h2>
       <p class="muted">请先同步虚拟房间。仅支持 Telegram 真人账号，每次最多 50 条纯文本；会以当前时间写入 Matrix 时间线，不保留 Telegram 原始发送时间。重复导入会跳过已映射消息。</p>
       <div class="grid">
@@ -307,6 +307,17 @@
   $('tgStart').addEventListener('click', () => tgLogin('start',$('tgPhone').value.trim()));
   $('tgVerify').addEventListener('click', () => tgLogin('verify',$('tgCode').value.trim()));
   $('tg2fa').addEventListener('click', () => tgLogin('verify',$('tgPassword').value));
+  $('tgLogout').addEventListener('click', async () => {
+    const id=$('tgAccount').value;
+    if (!id || !confirm('此操作会在 Telegram 服务器撤销本桥接会话授权，确认登出？')) return;
+    try {
+      await api('accounts/'+encodeURIComponent(id)+'/telegram/logout',{
+        method:'POST',body:JSON.stringify({})
+      });
+      await refresh();
+      showMessage('Telegram 远端授权已撤销。此账号现在可以安全删除本地文件。');
+    }catch(error){showMessage(error);}
+  });
   $('tgHistory').addEventListener('click', async () => {
     const id=$('tgAccount').value, chat=$('tgHistoryChat').value.trim();
     if (!id || !chat) { showMessage('请选择 Telegram 账号并填写会话 ID');return; }
