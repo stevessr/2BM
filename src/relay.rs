@@ -107,6 +107,20 @@ fn strip_reply_fallback<'a>(text:&'a str,is_reply:bool)->&'a str {
 pub async fn matrix_event(state: &Arc<AppState>, event: &Value) -> Result<()> {
     let kind = event["type"].as_str().unwrap_or_default();
     if kind == "m.room.member" {
+        if let (Some(room),Some(member))=(
+            event["room_id"].as_str(),event["state_key"].as_str()
+        ) {
+            if member.starts_with("@_2bm_p_") {
+                if matches!(event["content"]["membership"].as_str(),Some("leave"|"ban")) {
+                    sqlx::query("DELETE FROM ghost_room_memberships
+                        WHERE matrix_room=? AND ghost_mxid=?")
+                        .bind(room).bind(member).execute(&state.pool).await?;
+                } else if event["content"]["membership"]=="join" {
+                    sqlx::query("INSERT OR IGNORE INTO ghost_room_memberships(matrix_room,ghost_mxid)
+                        VALUES (?,?)").bind(room).bind(member).execute(&state.pool).await?;
+                }
+            }
+        }
         if event["state_key"] == state.config.bot_user() && event["content"]["membership"] == "invite" {
             if let Some(room) = event["room_id"].as_str() { matrix::join_bot(state,room).await?; }
         }

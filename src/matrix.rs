@@ -32,13 +32,12 @@ pub async fn ghost(state: &Arc<AppState>,account:&str,sender:&str,display:&str)-
             .split(':').next().ok_or_else(||anyhow::anyhow!("invalid ghost MXID"))?;
         register(state,localpart).await?;
     }
-    let response=state.http.put(format!("{}/_matrix/client/v3/profile/{}/displayname",
+    state.http.put(format!("{}/_matrix/client/v3/profile/{}/displayname",
         state.config.homeserver,urlencoding::encode(&mxid)))
         .bearer_auth(&state.config.as_token)
         .query(&[("user_id",&mxid)])
         .json(&json!({"displayname":display.chars().take(100).collect::<String>()}))
-        .send().await;
-    if let Err(error)=response {tracing::debug!(%error,"unable to update ghost display name");}
+        .send().await?.error_for_status()?;
     sqlx::query("INSERT INTO ghost_users(mxid,account_id,contact_id,display_name)
         VALUES (?,?,?,?) ON CONFLICT(mxid) DO UPDATE SET display_name=excluded.display_name")
         .bind(&mxid).bind(account).bind(sender).bind(display)
@@ -90,8 +89,13 @@ pub async fn create_virtual_room(
     }
     let response=response.error_for_status()?;
     let result:Value=response.json().await?;
-    result["room_id"].as_str().map(str::to_owned)
-        .ok_or_else(||anyhow::anyhow!("Matrix createRoom returned no room ID"))
+    let room=result["room_id"].as_str()
+        .ok_or_else(||anyhow::anyhow!("Matrix createRoom returned no room ID"))?;
+    if let Some(ghost)=creator {
+        sqlx::query("INSERT OR IGNORE INTO ghost_room_memberships(matrix_room,ghost_mxid)
+            VALUES (?,?)").bind(room).bind(ghost).execute(&state.pool).await?;
+    }
+    Ok(room.to_owned())
 }
 pub async fn leave_ghost(state:&Arc<AppState>,room:&str,ghost:&str)->Result<()>{
     state.http.post(format!("{}/_matrix/client/v3/rooms/{}/leave",
@@ -100,20 +104,30 @@ pub async fn leave_ghost(state:&Arc<AppState>,room:&str,ghost:&str)->Result<()>{
         .query(&[("user_id",ghost)])
         .json(&json!({}))
         .send().await?.error_for_status()?;
+    sqlx::query("DELETE FROM ghost_room_memberships WHERE matrix_room=? AND ghost_mxid=?")
+        .bind(room).bind(ghost).execute(&state.pool).await?;
     Ok(())
 }
 pub async fn ensure_ghost_in_room(state:&Arc<AppState>,room:&str,ghost:&str)->Result<()>{
-    // Most contacts are already joined (DM creators) or previously invited.
-    if join_ghost(state,room,ghost).await.is_ok() {return Ok(());}
-    let response=state.http.post(format!("{}/_matrix/client/v3/rooms/{}/invite",
-        state.config.homeserver,urlencoding::encode(room)))
-        .bearer_auth(&state.config.as_token)
-        .json(&json!({"user_id":ghost})).send().await?;
-    // An already joined/invited user may produce 4xx; attempt idempotent join.
-    if !response.status().is_success() {
-        tracing::debug!(status=%response.status(),"Matrix ghost invite not accepted");
+    let known:Option<i64>=sqlx::query_scalar(
+        "SELECT 1 FROM ghost_room_memberships WHERE matrix_room=? AND ghost_mxid=?"
+    ).bind(room).bind(ghost).fetch_optional(&state.pool).await?;
+    if known.is_some() {return Ok(());}
+    // Joining as a Matrix appservice masqueraded user may work immediately
+    // when it created the room; otherwise the bot must invite the ghost.
+    if join_ghost(state,room,ghost).await.is_err() {
+        let response=state.http.post(format!("{}/_matrix/client/v3/rooms/{}/invite",
+            state.config.homeserver,urlencoding::encode(room)))
+            .bearer_auth(&state.config.as_token)
+            .json(&json!({"user_id":ghost})).send().await?;
+        if !response.status().is_success() {
+            tracing::debug!(status=%response.status(),"Matrix ghost invite not accepted");
+        }
+        join_ghost(state,room,ghost).await?;
     }
-    join_ghost(state,room,ghost).await
+    sqlx::query("INSERT OR IGNORE INTO ghost_room_memberships(matrix_room,ghost_mxid)
+        VALUES (?,?)").bind(room).bind(ghost).execute(&state.pool).await?;
+    Ok(())
 }
 
 pub async fn set_virtual_room_name(
