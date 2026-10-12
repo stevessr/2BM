@@ -115,6 +115,18 @@ pub async fn ensure_ghost_in_room(state:&Arc<AppState>,room:&str,ghost:&str)->Re
     }
     join_ghost(state,room,ghost).await
 }
+
+pub async fn set_virtual_room_name(
+    state:&Arc<AppState>,room:&str,title:&str,actor:Option<&str>
+)->Result<()>{
+    let request=state.http.put(format!("{}/_matrix/client/v3/rooms/{}/state/m.room.name",
+        state.config.homeserver,urlencoding::encode(room)))
+        .bearer_auth(&state.config.as_token);
+    let request=if let Some(actor)=actor {request.query(&[("user_id",actor)])}
+        else {request};
+    request.json(&json!({"name":title})).send().await?.error_for_status()?;
+    Ok(())
+}
 pub async fn send_as(state:&Arc<AppState>,room:&str,body:&str,txn:&str,mxid:&str)->Result<String>{
     let response = state.http.put(format!("{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
         state.config.homeserver,urlencoding::encode(room),urlencoding::encode(txn)))

@@ -40,6 +40,10 @@ pub async fn ensure(
     let title = chat.title.trim();
     let title = if title.is_empty() { chat.external_chat.as_str() } else { title };
     let title: String = title.chars().take(160).collect();
+    let old_title:Option<String>=sqlx::query_scalar(
+        "SELECT title FROM virtual_chats WHERE account_id=? AND external_chat=?")
+        .bind(&account.id).bind(&chat.external_chat)
+        .fetch_optional(&state.pool).await?;
     sqlx::query("INSERT INTO virtual_chats(account_id,external_chat,title,direct)
         VALUES (?,?,?,?)
         ON CONFLICT(account_id,external_chat) DO UPDATE SET
@@ -77,6 +81,22 @@ pub async fn ensure(
     };
     if let Some(ghost) = sender_ghost.as_deref() {
         matrix::ensure_ghost_in_room(state, &mapping.matrix_room, ghost).await?;
+    }
+    // Only propagate meaningful source title changes, not fallback IDs.
+    // A non-bridge/manual room might reject renames; this must never block
+    // an otherwise successful message delivery.
+    if old_title.as_deref().is_some_and(|old|old!=title)
+        && title != chat.external_chat {
+        let actor=if chat.direct {
+            chat.contact_id.as_deref()
+                .or_else(||sender.map(|(id,_)|id))
+                .map(|id|matrix::ghost_user_id(state,&account.id,id))
+        } else {None};
+        if let Err(error)=matrix::set_virtual_room_name(
+            state,&mapping.matrix_room,&title,actor.as_deref()).await {
+            tracing::warn!(room=%mapping.matrix_room,%error,
+                "unable to synchronize virtual room display name");
+        }
     }
     Ok(mapping)
 }
