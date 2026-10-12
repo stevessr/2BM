@@ -89,6 +89,7 @@ pub async fn list_chats(state: &Arc<AppState>, account: &Account) -> Result<Vec<
 pub struct MemberSyncReport {
     pub discovered: usize,
     pub joined: usize,
+    pub already_present: usize,
     pub failed: usize,
 }
 pub async fn sync_group_members(
@@ -112,16 +113,30 @@ pub async fn sync_group_members(
     }
     let members=payload["data"].as_array()
         .context("OneBot get_group_member_list returned no array")?;
-    let mut report=MemberSyncReport {discovered:members.len(),joined:0,failed:0};
-    // Large QQ groups may contain thousands of members. A batch only provisions
-    // the first limited roster slice; live notices cover later arrivals.
-    for member in members.iter().take(limit.clamp(1,100)) {
+    let mut report=MemberSyncReport {
+        discovered:members.len(),joined:0,already_present:0,failed:0
+    };
+    // Skip already provisioned members on subsequent batches, allowing the next
+    // invocation to advance through a large group instead of repeating page one.
+    let mut attempted=0;
+    for member in members {
         let Some(id)=member["user_id"].as_i64().filter(|x|*x>0) else {continue};
+        let contact=id.to_string();
+        let exists:Option<i64>=sqlx::query_scalar(
+            "SELECT 1 FROM qq_synced_members WHERE account_id=? AND external_chat=? AND contact_id=?"
+        ).bind(&account.id).bind(chat).bind(&contact).fetch_optional(&state.pool).await?;
+        if exists.is_some() {report.already_present+=1;continue;}
+        if attempted>=limit.clamp(1,100) {break;}
+        attempted+=1;
         let name=member["card"].as_str().filter(|n|!n.is_empty())
             .or_else(||member["nickname"].as_str()).unwrap_or("QQ user");
         let outcome=async {
-            let ghost=crate::matrix::ghost(state,&account.id,&id.to_string(),name).await?;
-            crate::matrix::ensure_ghost_in_room(state,&mapping.matrix_room,&ghost).await
+            let ghost=crate::matrix::ghost(state,&account.id,&contact,name).await?;
+            crate::matrix::ensure_ghost_in_room(state,&mapping.matrix_room,&ghost).await?;
+            sqlx::query("INSERT OR IGNORE INTO qq_synced_members(account_id,external_chat,contact_id)
+                VALUES (?,?,?)").bind(&account.id).bind(chat).bind(&contact)
+                .execute(&state.pool).await?;
+            Ok::<(),anyhow::Error>(())
         }.await;
         match outcome {
             Ok(())=>report.joined+=1,
@@ -157,11 +172,18 @@ pub async fn membership_notice(
         let ghost=crate::matrix::ghost(state,&account.id,contact,
             &format!("QQ {contact}")).await?;
         crate::matrix::ensure_ghost_in_room(state,&mapping.matrix_room,&ghost).await?;
+        sqlx::query("INSERT OR IGNORE INTO qq_synced_members(account_id,external_chat,contact_id)
+            VALUES (?,?,?)").bind(&account.id).bind(chat).bind(contact)
+            .execute(&state.pool).await?;
     } else {
         // A departure can be delivered repeatedly or before a join.
         if let Err(error)=crate::matrix::leave_ghost(state,&mapping.matrix_room,&mxid).await {
             tracing::debug!(%error,room=%mapping.matrix_room,"QQ group leave may already be applied");
         }
+        sqlx::query("DELETE FROM qq_synced_members
+            WHERE account_id=? AND external_chat=? AND contact_id=?")
+            .bind(&account.id).bind(chat).bind(contact)
+            .execute(&state.pool).await?;
     }
     Ok(())
 }

@@ -61,6 +61,12 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
             contact_id TEXT NOT NULL,
             display_name TEXT NOT NULL
         )",
+        "CREATE TABLE IF NOT EXISTS qq_synced_members (
+            account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            external_chat TEXT NOT NULL,
+            contact_id TEXT NOT NULL,
+            PRIMARY KEY(account_id,external_chat,contact_id)
+        )",
         "CREATE TABLE IF NOT EXISTS incoming (
             source_key TEXT PRIMARY KEY, delivered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",

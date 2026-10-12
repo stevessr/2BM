@@ -17,6 +17,9 @@ pub async fn send(state: &Arc<AppState>, credentials: &Value, chat: &str, text: 
     Ok(())
 }
 
+fn remote_message_id(message:&Value,update_id:i64)->String {
+    message["message_id"].as_i64().unwrap_or(update_id).to_string()
+}
 pub async fn poll(state: &Arc<AppState>, account_id: &str, credentials: &Value) -> Result<()> {
     let bot_token = token(credentials, "token")?;
     let offset = sqlx::query("SELECT next_offset FROM telegram_offsets WHERE account_id = ?")
@@ -47,7 +50,7 @@ pub async fn poll(state: &Arc<AppState>, account_id: &str, credentials: &Value) 
                     let sender_id = message["from"]["id"].as_i64()
                         .map(|id| id.to_string()).unwrap_or_default();
                     relay::incoming(state, account_id, &chat.to_string(),
-                        &update_id.to_string(), &sender_id, sender, text).await?;
+                        &remote_message_id(message,update_id), &sender_id, sender, text).await?;
                 }
             }
             sqlx::query(
@@ -58,4 +61,14 @@ pub async fn poll(state: &Arc<AppState>, account_id: &str, credentials: &Value) 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn remote_message_id_tracks_original_message_not_update_sequence(){
+        assert_eq!(remote_message_id(&json!({"message_id":23}),1000),"23");
+        assert_eq!(remote_message_id(&json!({}),1000),"1000");
+    }
 }

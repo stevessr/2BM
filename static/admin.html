@@ -282,7 +282,7 @@
       const result=await api('accounts/'+encodeURIComponent(id)+'/qq/members',{
         method:'POST',body:JSON.stringify({chat,limit:Number($('qqMemberLimit').value)})
       });
-      showMessage('群成员共 '+result.discovered+'，本批同步 '+result.joined+'，失败 '+result.failed);
+      showMessage('群成员共 '+result.discovered+'，本批同步 '+result.joined+'，已存在 '+result.already_present+'，失败 '+result.failed);
     } catch(e) {showMessage(e);} finally {$('qqMembers').disabled=false;}
   });
   $('syncChats').addEventListener('click', async () => {
