@@ -128,7 +128,7 @@ pub async fn sync(
             let current:Option<String>=sqlx::query_scalar(
                 "SELECT title FROM virtual_chats WHERE account_id=? AND external_chat=?"
             ).bind(&account.id).bind(&chat.external_chat).fetch_optional(&state.pool).await?;
-            if desired != chat.external_chat && current.as_deref() != Some(&desired) {
+            if desired != chat.external_chat && current.as_deref() != Some(desired.as_str()) {
                 if let Err(error)=ensure(state,account,&chat,None).await {
                     report.failed+=1;
                     tracing::warn!(account=%account.id,chat=%chat.external_chat,%error,
