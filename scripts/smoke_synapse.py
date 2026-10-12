@@ -230,6 +230,39 @@ def main():
         assert not any(e["content"].get("body")=="Sensitive plaintext must not leak"
             for e in messages(owner,room) if e["type"]=="m.room.message")
 
+        # Enable REAL Matrix encryption in the second DM as its contact Ghost
+        # (the room creator). Then erase the local cache entry to simulate a
+        # restored/older DB that missed the encryption state notification.
+        creator_query=quote(expected,safe="")
+        second_encoded=quote(second_room,safe="")
+        api("PUT",HS,
+            f"/_matrix/client/v3/rooms/{second_encoded}/state/m.room.encryption"
+            f"?user_id={creator_query}",
+            {"algorithm":"m.megolm.v1.aes-sha2"},
+            os.environ["BRIDGE_MATRIX_AS_TOKEN"])
+        until(lambda:any(item["matrix_room"]==second_room
+            for item in api("GET",ADMIN,"/api/admin/room-warnings",
+                token=admin)), "Matrix encryption notification")
+        import sqlite3
+        database_path=os.environ["BRIDGE_DATABASE_URL"].removeprefix("sqlite://")
+        with sqlite3.connect(database_path,timeout=10) as database:
+            database.execute("DELETE FROM room_warnings WHERE matrix_room=?",
+                (second_room,))
+        try:
+            api("POST",AS,second_hook,{
+                "post_type":"message","message_type":"private","self_id":999,
+                "user_id":123,"message_id":9011,
+                "raw_message":"Must not bridge into genuinely encrypted room",
+                "sender":{"nickname":"Alice"}
+            },"local-hook")
+        except AssertionError as failure:
+            assert ": 500 " in str(failure),failure
+        else:
+            raise AssertionError("live encryption-state probe was bypassed")
+        assert not any(e["type"]=="m.room.message" and e["content"].get("body")==
+            "Must not bridge into genuinely encrypted room"
+            for e in messages(owner,second_room))
+
         print("PASS Synapse/2BM/OneBot: virtual room, replies, dedup, recalls, self-first DM")
     finally:
         server.shutdown()
