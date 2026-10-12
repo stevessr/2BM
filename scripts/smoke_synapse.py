@@ -115,6 +115,18 @@ def main():
         assert sum(1 for e in messages(owner,room) if e["type"]=="m.room.message"
             and e["content"].get("body")=="Hello from QQ")==1
 
+        source_reply={"post_type":"message","message_type":"private",
+            "self_id":999,"user_id":123,"message_id":457,
+            "message":[{"type":"reply","data":{"id":"456"}},
+                       {"type":"text","data":{"text":"QQ native reply"}}],
+            "sender":{"nickname":"Alice"}}
+        api("POST",AS,hook,source_reply,"local-hook")
+        quoted=until(lambda:next((e for e in messages(owner,room)
+            if e["type"]=="m.room.message" and
+            e["content"].get("body")=="QQ native reply"),None),
+            "OneBot native reply => Matrix relation")
+        assert quoted["content"]["m.relates_to"]["m.in_reply_to"]["event_id"]==inbound["event_id"]
+
         event={"msgtype":"m.text",
             "body":"> <Alice> Hello from QQ\n\nMatrix response",
             "m.relates_to":{"m.in_reply_to":{"event_id":inbound["event_id"]}}}
