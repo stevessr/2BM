@@ -117,3 +117,16 @@ Install `pkg-config` and `libsqlite3-dev` on Debian/Ubuntu. SQLx dynamically lin
 - **Telegram recent import (opt in only):** `POST /api/admin/accounts/{id}/telegram/history` accepts `{"chat":"-10012345","limit":20}` (1–50), requires an existing Matrix virtual room and an online Telegram user session. The latest messages are imported oldest-first, with stable source IDs to avoid duplication. Text messages sent by other Telegram devices are shown via an account-scoped "Me (Telegram)" ghost identity.
 - This is **not Matrix-native historical backfill**. The imported messages receive **new Matrix timestamps**, not the original Telegram sent timestamp. Import is disabled by default, explicitly initiated by an administrator, and only supports text content. It does not restore edits, reactions, attachments, or historical membership.
 - **QQ recall:** OneBot `group_recall` and `friend_recall` notices redact linked incoming Matrix events using the original ghost identity. A recall arriving before its message is persisted as a tombstone, preventing the removed text from being replayed later. There is not yet a general bidirectional edit/delete/recall feature.
+
+## Linked replies, recalls, and room title refresh
+
+- A mapping table tracks `(account_id, external_chat, external_message)` to the Matrix event ID and the ghost identity that sent it.
+- OneBot `friend_recall` and `group_recall` events now redact matching Matrix events. Out-of-order recalls are persisted as tombstones, preventing later replay. Unknown/unbridged messages are ignored safely.
+- Matrix replies to already-bridged QQ messages use OneBot 11's native `reply` segment, provided that the quoted Matrix event belongs to the **same** QQ account and chat. Other replies fall back to plaintext without Matrix quote boilerplate. `m.replace` Matrix edit events are intentionally ignored until actual bidirectional edits are implemented.
+- QQ group member sync advances past members already recorded in `qq_synced_members` on repeated requests; QQ join/leave notifications update that registry. Membership is best-effort and requires real-home-server testing.
+- Existing Matrix room names follow changed QQ/TG conversation titles during sync, using the service/DM ghost identity as the Matrix state-event author. If the homeserver rejects a rename, SQLite retains the old synced name so subsequent sync attempts retry.
+- **Not yet supported:** Matrix-to-QQ recall, Telegram native reply/edit/delete mapping, attachments/media transfer, full native timestamp-preserving history backfill, group-member pagination across all QQ/TG groups, and historical member join timestamps.
+
+### Verification
+
+Rust CI runs `cargo check --all-targets`, `cargo test --all-targets`, and `cargo clippy --all-targets`. Mock-server tests include Matrix room alias crash recovery, QQ source recall idempotency/tombstones, and Matrix-to-QQ native replies with repeated AS transaction suppression. These tests do **not** replace a real Synapse/QQ/Telegram end-to-end exercise.
