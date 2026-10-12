@@ -70,16 +70,17 @@ The account ID is visible in WebUI. Some OneBot connectors use their API token a
 The admin REST API requires `Authorization: Bearer $BRIDGE_ADMIN_TOKEN`.
 
 - `GET/POST /api/admin/accounts` and `DELETE /api/admin/accounts/{id}`
-- `GET/POST /api/admin/mappings` and `DELETE /api/admin/mappings/{id}`
+- `GET /api/admin/virtual-rooms` and `POST /api/admin/accounts/{id}/sync` (JSON `{"limit":50}`)
+- `GET/POST /api/admin/mappings` and `DELETE /api/admin/mappings/{id}` (manual advanced mapping)
 - On Matrix listener: `GET /healthz`, `PUT /_matrix/app/v1/transactions/{txn}`, `POST /_matrix/app/v1/ping`, user lookup, and `POST /hooks/qq/{account-id}`.
 
 ## MVP limitations
 
-**Implemented:** plaintext message bridging; account management; split/combined HTTP listeners; encrypted credentials at rest; SQLite room mappings, incoming deduplication and Matrix transaction deduplication; Telegram poll offsets; Discord Gateway reconnect; simple OneBot HTTP integration.
+**Implemented:** plaintext message bridging with virtual Matrix rooms and individual ghost senders; QQ friend/group and Telegram dialog discovery; admin-triggered and limited automatic room provisioning; account management; split/combined HTTP listeners; encrypted account credentials; SQLite room mappings, sender registry, incoming deduplication and Matrix transaction deduplication; Telegram poll offsets; Discord Gateway reconnect; OneBot HTTP integration.
 
-**Not yet implemented:** full Telegram dialogs discovery and backfill, Discord human login (official API does not support self-bots), Matrix E2EE, full ghost/puppeting identities, QQ QR login inside 2BM, file/media transfer, historical sync, message edits/deletes/reactions/replies, presence/typing/read receipts, Discord Gateway resume, HA multi-replica mode or full Matrix third-party lookups. Only standard plaintext messages and captions are handled.
+**Not yet implemented:** complete Telegram dialogs pagination beyond the current discovery cap, historic message backfill, full remote membership snapshot, Discord human login (official API does not support self-bots), Matrix E2EE, QQ QR login inside 2BM, file/media transfer, edits/deletes/reactions/replies, presence/typing/read receipts, Discord Gateway resume, HA multi-replica mode or full Matrix third-party lookups. Only standard plaintext messages and captions are handled.
 
-Relaying uses one Matrix bot identity `@_2bm:server` with a source prefix. External outbound delivery is at-least-once across crashes between network delivery and local acknowledgement. Avoid running multiple replicas using the same account and database.
+Inbound messages are sent as per-contact Matrix ghost identities rather than under a single source-prefixed bot. Each real external chat maps to a persistent private Matrix room. Outbound Matrix messages are accepted only from the account's configured Matrix owner. External outbound delivery is at-least-once across crashes between network delivery and local acknowledgement; avoid active replicas using the same account and database.
 
 ## Development
 
