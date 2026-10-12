@@ -47,7 +47,9 @@ def main() -> None:
         "namespaces:\n"
         "  users:\n"
         "    - exclusive: true\n"
-        f"      regex: '@_2bm:{server}'\n"
+        f"      regex: '@_2bm:{server}'\n" +
+        "    - exclusive: true\n" +
+        f"      regex: '@_2bm_p_[0-9a-f]{{32}}:{server}'\n"
         "  aliases: []\n"
         "  rooms: []\n"
     )

@@ -43,8 +43,8 @@
     <section class="panel">
       <h2>接入账号</h2>
       <div class="grid">
-        <label>平台<select id="platform"><option value="telegram">Telegram Bot</option><option value="discord">Discord Bot</option><option value="qq">QQ via OneBot 11 / NapCat</option></select></label>
-        <label>备注名称<input id="label" placeholder="例如：我的群机器人" maxlength="100"></label>
+        <label>平台<select id="platform"><option value="qq">QQ 真人账号 · NapCat</option><option value="telegram">Telegram Bot 兼容模式</option><option value="discord">Discord Bot 官方模式</option></select></label>
+        <label>备注名称<input id="label" placeholder="我的账号" maxlength="100"></label><label>Matrix 控制者<input id="ownerMxid" placeholder="@me:example.org"></label>
       </div>
       <div id="botFields" class="grid"><label>Bot Token<input id="botToken" type="password" autocomplete="off"></label></div>
       <div id="qqFields" class="grid hidden">
@@ -53,12 +53,12 @@
         <label>Webhook Secret<input id="qqSecret" type="password" placeholder="单独生成随机密钥"></label>
       </div>
       <button id="addAccount">保存账号</button>
-      <p class="muted">Telegram 使用 BotFather Token；Discord 使用 Bot Token，须开启 MESSAGE CONTENT INTENT；QQ 登录需先在 NapCat/OneBot 完成。</p>
+      <p class="muted">QQ 使用在 NapCat 登录的真人账号；Telegram/Discord 目前仅有 Bot 兼容模式，不是个人账号。</p>
       <div id="accounts"></div>
     </section>
     <section class="panel">
       <h2>房间映射</h2>
-      <p class="muted">首先在 Matrix 房间邀请 <code>@_2bm:你的服务器域名</code>，然后添加下面的映射。</p>
+      <p class="muted">收到外部新会话时自动创建 Matrix 房间、邀请控制者及虚拟联系人；此处也可手动映射已有房间。</p>
       <div class="grid">
         <label>账号<select id="accountSelection"></select></label>
         <label>外部聊天 ID<input id="externalChat" placeholder="Telegram -100... / Discord 频道 ID / QQ group:123"></label>
@@ -102,7 +102,7 @@
       option.value = account.id;
       option.textContent = account.label + ' (' + account.platform + ')';
       $('accountSelection').append(option);
-      addRow($('accounts'), account.label + ' · ' + account.platform + ' · ' + account.id,
+      addRow($('accounts'), account.label + ' · ' + account.platform + ' · ' + account.owner_mxid + ' · ' + account.id,
         () => remove('accounts/', account.id));
     }
     $('mappings').replaceChildren();
@@ -156,7 +156,7 @@
       const credentials = platform === 'qq'
         ? {api_base: $('qqBase').value.trim(), access_token: $('qqApiToken').value, hook_secret: $('qqSecret').value}
         : {token: $('botToken').value};
-      await api('accounts', {method:'POST', body:JSON.stringify({platform, label:$('label').value, credentials})});
+      await api('accounts', {method:'POST', body:JSON.stringify({platform, label:$('label').value, owner_mxid:$('ownerMxid').value.trim(), credentials})});
       for (const field of ['botToken','qqApiToken','qqSecret']) $(field).value = '';
       await refresh(); showMessage();
     } catch(err) { showMessage(err); }

@@ -8,6 +8,7 @@ pub struct Account {
     pub id: String,
     pub platform: String,
     pub label: String,
+    pub owner_mxid: String,
     pub credentials: String,
     pub enabled: bool,
 }
@@ -17,6 +18,7 @@ pub struct AccountPublic {
     pub id: String,
     pub platform: String,
     pub label: String,
+    pub owner_mxid: String,
     pub enabled: bool,
 }
 
@@ -37,7 +39,7 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
         "PRAGMA journal_mode=WAL",
         "CREATE TABLE IF NOT EXISTS accounts (
             id TEXT PRIMARY KEY, platform TEXT NOT NULL, label TEXT NOT NULL,
-            credentials TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1
+            owner_mxid TEXT NOT NULL DEFAULT '', credentials TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1
         )",
         "CREATE TABLE IF NOT EXISTS mappings (
             id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL
@@ -67,13 +69,13 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
 
 pub async fn accounts(db: &SqlitePool) -> Result<Vec<Account>> {
     Ok(sqlx::query_as::<_, Account>(
-        "SELECT id,platform,label,credentials,enabled FROM accounts ORDER BY label"
+        "SELECT id,platform,label,owner_mxid,credentials,enabled FROM accounts ORDER BY label"
     ).fetch_all(db).await?)
 }
 
 pub async fn account(db: &SqlitePool, id: &str) -> Result<Option<Account>> {
     Ok(sqlx::query_as::<_, Account>(
-        "SELECT id,platform,label,credentials,enabled FROM accounts WHERE id = ?"
+        "SELECT id,platform,label,owner_mxid,credentials,enabled FROM accounts WHERE id = ?"
     ).bind(id).fetch_optional(db).await?)
 }
 

@@ -73,7 +73,8 @@ pub async fn gateway(state: &Arc<AppState>, account_id: &str, credentials: &Valu
                                 let sender = data["author"]["global_name"].as_str()
                                     .or_else(|| data["author"]["username"].as_str())
                                     .unwrap_or("Discord user");
-                                relay::incoming(state, account_id, channel, id, sender, body).await?;
+                                let sender_id = data["author"]["id"].as_str().unwrap_or_default();
+                                relay::incoming(state, account_id, channel, id, sender_id, sender, body).await?;
                             }
                             _ => {}
                         }

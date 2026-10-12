@@ -88,7 +88,7 @@ async fn list_accounts(
 ) -> ApiResult<Json<Value>> {
     admin_check(&headers, &state)?;
     let accounts: Vec<db::AccountPublic> = sqlx::query_as(
-        "SELECT id,platform,label,enabled FROM accounts ORDER BY label"
+        "SELECT id,platform,label,owner_mxid,enabled FROM accounts ORDER BY label"
     ).fetch_all(&state.pool).await.map_err(internal)?;
     Ok(Json(json!(accounts)))
 }
@@ -97,6 +97,7 @@ async fn list_accounts(
 struct CreateAccount {
     platform: String,
     label: String,
+    owner_mxid: String,
     credentials: Value,
 }
 
@@ -107,6 +108,10 @@ async fn create_account(
     admin_check(&headers, &state)?;
     if request.label.trim().is_empty() || request.label.len() > 100 {
         return Err(error(StatusCode::BAD_REQUEST, "label must contain 1-100 characters"));
+    }
+    if !request.owner_mxid.starts_with('@') || !request.owner_mxid.contains(':')
+        || request.owner_mxid.len() > 255 {
+        return Err(error(StatusCode::BAD_REQUEST, "owner_mxid must be @user:server"));
     }
     match request.platform.as_str() {
         "telegram" | "discord" => {
@@ -131,11 +136,11 @@ async fn create_account(
     let sealed = crypto::encrypt(&state.config.credential_key, &request.credentials)
         .map_err(internal)?;
     sqlx::query(
-        "INSERT INTO accounts(id,platform,label,credentials,enabled) VALUES (?,?,?,?,1)"
-    ).bind(&id).bind(&request.platform).bind(&request.label).bind(sealed)
+        "INSERT INTO accounts(id,platform,label,owner_mxid,credentials,enabled) VALUES (?,?,?,?,?,1)"
+    ).bind(&id).bind(&request.platform).bind(&request.label).bind(&request.owner_mxid).bind(sealed)
         .execute(&state.pool).await.map_err(internal)?;
     Ok((StatusCode::CREATED, Json(json!({
-        "id": id, "platform": request.platform, "label": request.label, "enabled": true
+        "id": id, "platform": request.platform, "label": request.label, "owner_mxid": request.owner_mxid, "enabled": true
     }))))
 }
 
@@ -280,6 +285,9 @@ async fn qq_hook(
         .map(str::to_owned)
         .or_else(|| body["message_id"].as_i64().map(|n| n.to_string()))
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "missing message_id"))?;
+    let sender_id = body["user_id"].as_i64()
+        .map(|n| n.to_string()).unwrap_or_default();
+    if sender_id.is_empty() { return Err(error(StatusCode::BAD_REQUEST,"missing QQ sender")); }
     let sender = body["sender"]["card"].as_str()
         .filter(|s| !s.is_empty())
         .or_else(|| body["sender"]["nickname"].as_str())
@@ -287,7 +295,7 @@ async fn qq_hook(
     let text = body["raw_message"].as_str()
         .or_else(|| body["message"].as_str())
         .unwrap_or_default();
-    relay::incoming(&state, &account_id, &chat, &message_id, sender, text)
+    relay::incoming(&state, &account_id, &chat, &message_id, &sender_id, sender, text)
         .await.map_err(internal)?;
     Ok(Json(json!({})))
 }

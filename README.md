@@ -2,7 +2,7 @@
 
 A modular **Rust Matrix Application Service bridge** with a lightweight, independently served account-management WebUI.
 
-**Status: experimental MVP.** Plain-text messages can travel in both directions after configuration. 2BM is **not a Matrix homeserver** and requires Synapse or another homeserver supporting Application Services.
+**Status: experimental MVP; QQ human account puppeting; Telegram/Discord currently bot compatibility mode.** Plain-text messages can travel in both directions after configuration. 2BM is **not a Matrix homeserver** and requires Synapse or another homeserver supporting Application Services.
 
 ## Components and ports
 
@@ -18,9 +18,9 @@ A modular **Rust Matrix Application Service bridge** with a lightweight, indepen
 2. Set `BRIDGE_MATRIX_HOMESERVER` to the Client API URL that the bridge can reach and `BRIDGE_MATRIX_SERVER_NAME` to the Matrix **server name**.
 3. Generate your registration: `python3 scripts/generate_registration.py --url http://127.0.0.1:9001`. The URL must be reachable **from the homeserver**, so use `http://2bm:9001` on a shared Docker network, for example. Register the generated `registration.yaml` in Synapse and restart Synapse.
 4. Run `cargo run --release`, or `docker compose up --build -d`, then open <http://127.0.0.1:9000/admin>. Log in with `BRIDGE_ADMIN_TOKEN`.
-5. Add a platform account. Invite `@_2bm:YOUR_MATRIX_SERVER_NAME` to the Matrix room, then create a mapping using the actual `!room:server` ID.
+5. Add a platform account **with a Matrix owner ID** such as `@me:example.org`. On incoming messages rooms are created and the owner is invited automatically. Alternatively invite `@_2bm:YOUR_MATRIX_SERVER_NAME` to the Matrix room, then create a mapping using the actual `!room:server` ID.
 
-Accounts and external chats are mapped to Matrix rooms. One Matrix room can receive messages from multiple external chats.
+Accounts and external chats are mapped to Matrix rooms. Incoming messages appear under stable Matrix ghost identities. Unmapped conversations automatically create Matrix rooms and invite the Matrix owner. Only the owner can control the external account through the room.
 
 ## Connecting external platforms
 
@@ -30,11 +30,11 @@ Accounts and external chats are mapped to Matrix rooms. One Matrix room can rece
 | Discord | Gateway `MESSAGE_CREATE` | REST channel message | Discord channel snowflake |
 | QQ | OneBot 11 HTTP webhook | OneBot 11 HTTP API | `group:123456` or `private:123456` |
 
-**Telegram**: Create a bot in BotFather, add it to your chats, and configure its privacy settings and message access as needed. Do not poll the same bot token elsewhere.
+**Telegram (currently BOT mode, personal account support is not yet implemented)**: Create a bot in BotFather, add it to your chats, and configure its privacy settings and message access as needed. Do not poll the same bot token elsewhere.
 
-**Discord**: Create an application/bot and grant it read/send access. Enable the privileged **Message Content Intent** to receive message content. Use a bot token, not a user token.
+**Discord (currently BOT mode; ordinary user automation violates Discord policy)**: Create an application/bot and grant it read/send access. Enable the privileged **Message Content Intent** to receive message content. Use a bot token, not a user token.
 
-**QQ**: Perform QQ login in **NapCat or another OneBot 11-compatible connector**. In WebUI, supply `api_base` (e.g. `http://napcat:3000`), `access_token`, and `hook_secret`. Configure OneBot HTTP event delivery to:
+**QQ (HUMAN account)**: Perform QQ login in **NapCat or another OneBot 11-compatible connector**. In WebUI, supply `api_base` (e.g. `http://napcat:3000`), `access_token`, and `hook_secret`. Configure OneBot HTTP event delivery to:
 
 ```http
 POST http://<bridge-host>:9001/hooks/qq/<account-id>
@@ -74,7 +74,7 @@ The admin REST API requires `Authorization: Bearer $BRIDGE_ADMIN_TOKEN`.
 
 **Implemented:** plaintext message bridging; account management; split/combined HTTP listeners; encrypted credentials at rest; SQLite room mappings, incoming deduplication and Matrix transaction deduplication; Telegram poll offsets; Discord Gateway reconnect; simple OneBot HTTP integration.
 
-**Not yet implemented:** Matrix E2EE, full ghost/puppeting identities, QQ QR login inside 2BM, file/media transfer, historical sync, message edits/deletes/reactions/replies, presence/typing/read receipts, Discord Gateway resume, HA multi-replica mode or full Matrix third-party lookups. Only standard plaintext messages and captions are handled.
+**Not yet implemented:** Telegram human MTProto login (TDLib/grammers), Discord human login (official API does not support self-bots), Matrix E2EE, full ghost/puppeting identities, QQ QR login inside 2BM, file/media transfer, historical sync, message edits/deletes/reactions/replies, presence/typing/read receipts, Discord Gateway resume, HA multi-replica mode or full Matrix third-party lookups. Only standard plaintext messages and captions are handled.
 
 Relaying uses one Matrix bot identity `@_2bm:server` with a source prefix. External outbound delivery is at-least-once across crashes between network delivery and local acknowledgement. Avoid running multiple replicas using the same account and database.
 

@@ -44,8 +44,10 @@ pub async fn poll(state: &Arc<AppState>, account_id: &str, credentials: &Value) 
                     let sender = message["from"]["username"].as_str()
                         .or_else(|| message["from"]["first_name"].as_str())
                         .unwrap_or("Telegram user");
+                    let sender_id = message["from"]["id"].as_i64()
+                        .map(|id| id.to_string()).unwrap_or_default();
                     relay::incoming(state, account_id, &chat.to_string(),
-                        &update_id.to_string(), sender, text).await?;
+                        &update_id.to_string(), &sender_id, sender, text).await?;
                 }
             }
             sqlx::query(
