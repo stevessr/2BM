@@ -60,6 +60,12 @@ pub async fn incoming_with_reply(
     let mapping = crate::virtual_rooms::ensure(
         state, &account, &descriptor, Some((sender_id,sender))
     ).await?;
+    let encrypted:Option<i64>=sqlx::query_scalar(
+        "SELECT 1 FROM room_warnings WHERE matrix_room=? AND reason='e2ee_unsupported'"
+    ).bind(&mapping.matrix_room).fetch_optional(&state.pool).await?;
+    if encrypted.is_some() {
+        anyhow::bail!("refusing to forward plaintext into an encrypted Matrix room")
+    }
     let ghost = matrix::ghost_user_id(state,account_id,sender_id);
     let txn = Uuid::new_v5(&Uuid::NAMESPACE_URL,source_key.as_bytes()).to_string();
     let matrix_reply=if let Some(remote_reply)=reply_to {

@@ -162,6 +162,23 @@ pub async fn set_virtual_room_name(
     request.json(&json!({"name":title})).send().await?.error_for_status()?;
     Ok(())
 }
+/// Reject attaching an existing encrypted Matrix room to a plaintext bridge.
+/// Matrix E2EE cannot be disabled on the room after activation.
+pub async fn require_unencrypted(state:&Arc<AppState>,room:&str)->Result<()> {
+    let result=state.http.get(format!(
+        "{}/_matrix/client/v3/rooms/{}/state/m.room.encryption",
+        state.config.homeserver,urlencoding::encode(room)))
+        .bearer_auth(&state.config.as_token).send().await?;
+    if result.status()==StatusCode::NOT_FOUND {
+        return Ok(());
+    }
+    let status=result.status();
+    if status.is_success() {
+        bail!("Matrix room has encryption enabled; choose an unencrypted room")
+    }
+    bail!("unable to verify Matrix room encryption (HTTP {status}); confirm bridge access first")
+}
+
 pub async fn send_as(state:&Arc<AppState>,room:&str,body:&str,txn:&str,mxid:&str)->Result<String>{
     send_as_reply(state,room,body,txn,mxid,None).await
 }
