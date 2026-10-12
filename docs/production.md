@@ -157,3 +157,35 @@ space for the worst planned outage; queued content is encrypted in SQLite
 but metadata, logs, memory and filesystem backups still require protection.
 `synchronous=FULL` assumes real filesystem fsync durability. Do not use
 unsafe network or ephemeral filesystems for authoritative DB storage.
+
+## Alias ownership, live encryption and independent inbox consumers
+
+During SQLite mapping recovery, an existing Matrix alias is never sufficient to
+prove that the room belongs to the account. The appservice verifies the
+`com.2bm.bridge` state marker using the bridge-owned room creator identity.
+Do not manually delete or edit bridge marker state without expecting recovery
+to fail closed. A foreign or inaccessible room alias is a security incident.
+
+Every inbound plaintext Matrix ghost message additionally checks the live
+room `m.room.encryption` state, using the Ghost sender. This adds one read
+request per delivered source message but closes the gap after missed state
+events, restores and stale caches. When homeserver access fails, delivery
+remains queued for operator review/retry; never turn off the check to force
+recovery into an encrypted room.
+
+QQ self events, other QQ callbacks and Telegram personal-account updates have
+independent queue-consumer loops and 20-second per-attempt timeouts. Source
+webhooks are acknowledged **only after durable insertion**; metrics in WebUI
+show pending and retry state, not chat bodies. An account deactivated while a
+callback is queued does not mark that message delivered. Operators must
+resolve lingering encrypted inbox entries before removing the account.
+
+Telegram dialog discovery scans beyond the original fixed 200-dialog cap and
+finds successive batches of new conversations. A defensive maximum of 10,000
+dialog entries per scan still applies to pathological accounts, and a very
+large contact graph may need separate import/runbook planning.
+
+The Rust integration suite now mocks a Homeserver to exercise real encrypted
+Telegram queue delivery and repeat-update suppression. It still does not
+connect to Telegram MTProto in live mode, and the QQ integration uses a local
+OneBot stub rather than a real NapCat installation.
