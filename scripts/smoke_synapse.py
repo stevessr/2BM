@@ -160,6 +160,17 @@ def main():
         assert len(matching)==1,matching
         assert matching[0]["sender"]=="@owner:smoke.test",matching
 
+        # The bridge cannot masquerade as @owner with the AS token. It must
+        # redact this outbound message through the DM's privileged creator
+        # ghost when QQ reports a recall of our own sent message.
+        own_recall={"post_type":"notice","notice_type":"friend_recall",
+            "self_id":999,"user_id":999,"target_id":123,"message_id":9001}
+        api("POST",AS,hook,own_recall,"local-hook")
+        owner_event_id=quote(matching[0]["event_id"],safe="")
+        until(lambda:api("GET",HS,
+            f"/_matrix/client/v3/rooms/{rid}/event/{owner_event_id}",
+            token=owner).get("content")=={},"Matrix owner event redaction")
+
         recall={"post_type":"notice","notice_type":"friend_recall",
                 "self_id":999,"user_id":123,"message_id":456}
         api("POST",AS,hook,recall,"local-hook")

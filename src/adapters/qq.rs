@@ -231,7 +231,13 @@ pub fn recall_target(event:&Value)->Option<(String,String)>{
         .or_else(||event["message_id"].as_str().map(str::to_owned))?;
     let chat=match event["notice_type"].as_str()? {
         "group_recall" => format!("group:{}",event["group_id"].as_i64()?),
-        "friend_recall" => format!("private:{}",event["user_id"].as_i64()?),
+        "friend_recall" => {
+            let actor=event["user_id"].as_i64()?;
+            let peer=if Some(actor)==event["self_id"].as_i64() {
+                event["target_id"].as_i64().unwrap_or(actor)
+            } else {actor};
+            format!("private:{peer}")
+        },
         _ => return None,
     };
     Some((chat,msg))
@@ -285,6 +291,9 @@ mod tests {
             Some(("group:25".into(),"14".into())));
         assert_eq!(recall_target(&json!({"notice_type":"friend_recall","user_id":99,"message_id":12})),
             Some(("private:99".into(),"12".into())));
+        assert_eq!(recall_target(&json!({"notice_type":"friend_recall",
+            "self_id":999,"user_id":999,"target_id":123,"message_id":13})),
+            Some(("private:123".into(),"13".into())));
         assert_eq!(recall_target(&json!({"notice_type":"poke","user_id":99,"message_id":12})),None);
     }
     #[test]

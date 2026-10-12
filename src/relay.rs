@@ -257,6 +257,18 @@ pub async fn matrix_event(state: &Arc<AppState>, event: &Value) -> Result<()> {
                 crate::delivery::complete(state,&key,&account.id,
                     &mapping.external_chat,remote_sent.as_deref(),
                     room,event_id,sender).await?;
+                // Source recall may race with the source send HTTP response.
+                // Once the remote message ID is linked, apply any tombstone.
+                if let Some(id)=remote_sent.as_deref() {
+                    let recalled:Option<i64>=sqlx::query_scalar(
+                        "SELECT 1 FROM recall_tombstones WHERE
+                         account_id=? AND external_chat=? AND external_message=?")
+                        .bind(&account.id).bind(&mapping.external_chat)
+                        .bind(id).fetch_optional(&state.pool).await?;
+                    if recalled.is_some() {
+                        recall(state,&account.id,&mapping.external_chat,id).await?;
+                    }
+                }
             }
             Err(error)=>{
                 crate::delivery::uncertain(state,&key,
