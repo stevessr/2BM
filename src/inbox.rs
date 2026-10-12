@@ -7,16 +7,75 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+/// Upper bounds protect small VPS disks during long Matrix outages. They
+/// apply per account across ALL inbound queues; counted inside a single
+/// INSERT statement to avoid check-then-insert races between callbacks.
+pub const MAX_PENDING_PER_ACCOUNT:i64=20_000;
+const MAX_ENVELOPE_BYTES:usize=256*1024;
+
+#[derive(Clone,Copy)]
+enum InboxTable {QqOwn,QqEvents,Telegram}
+impl InboxTable {
+    fn sql(self)->&'static str {
+        match self {
+            Self::QqOwn=> "qq_own_inbox",
+            Self::QqEvents=> "qq_events_inbox",
+            Self::Telegram=> "telegram_events_inbox",
+        }
+    }
+}
+async fn durable_insert(
+    state:&Arc<AppState>,kind:InboxTable,key:&str,account:&str,sealed:&str,
+    max_pending:i64
+)->Result<()> {
+    if sealed.len()>MAX_ENVELOPE_BYTES {
+        anyhow::bail!("encrypted message exceeds 256 KiB inbox limit");
+    }
+    let table=kind.sql(); // fixed allowlist, not user-supplied SQL
+    let sql=format!(
+        "INSERT OR IGNORE INTO {table} (source_key,account_id,sealed)
+         SELECT ?,?,? WHERE (
+           (SELECT COUNT(*) FROM qq_own_inbox WHERE account_id=?)
+          +(SELECT COUNT(*) FROM qq_events_inbox WHERE account_id=?)
+          +(SELECT COUNT(*) FROM telegram_events_inbox WHERE account_id=?)
+         ) < ?"
+    );
+    let result=sqlx::query(&sql)
+        .bind(key).bind(account).bind(sealed).bind(account).bind(account)
+        .bind(account).bind(max_pending)
+        .execute(&state.pool).await?;
+    if result.rows_affected()==0 {
+        // Idempotent redelivery remains ACK-able even when the queue fills.
+        let found:String=format!(
+            "SELECT 1 FROM {table} WHERE source_key=? AND account_id=?"
+        );
+        let duplicate:Option<i64>=sqlx::query_scalar(&found)
+            .bind(key).bind(account).fetch_optional(&state.pool).await?;
+        if duplicate.is_none() {
+            anyhow::bail!("inbound queue full for this account; retry upstream later");
+        }
+    }
+    Ok(())
+}
+
+pub async fn queue_load(state:&Arc<AppState>)->Result<Vec<(String,i64)>> {
+    Ok(sqlx::query_as(
+        "SELECT account_id,COUNT(*) AS pending FROM (
+           SELECT account_id FROM qq_own_inbox
+           UNION ALL SELECT account_id FROM qq_events_inbox
+           UNION ALL SELECT account_id FROM telegram_events_inbox
+         ) GROUP BY account_id ORDER BY pending DESC")
+         .fetch_all(&state.pool).await?)
+}
+
 pub async fn enqueue_qq_own(
     state:&Arc<AppState>,account:&str,chat:&str,message_id:&str,text:&str
 )->Result<()>{
     let key=format!("{account}:{chat}:{message_id}");
     let sealed=crypto::encrypt(&state.config.credential_key,
         &json!({"chat":chat,"message_id":message_id,"text":text}))?;
-    sqlx::query("INSERT OR IGNORE INTO qq_own_inbox
-        (source_key,account_id,sealed) VALUES (?,?,?)")
-        .bind(key).bind(account).bind(sealed).execute(&state.pool).await?;
-    Ok(())
+    durable_insert(state,InboxTable::QqOwn,&key,account,&sealed,
+        MAX_PENDING_PER_ACCOUNT).await
 }
 
 pub async fn drain_qq_own(state:&Arc<AppState>,limit:i64)->Result<usize>{
@@ -79,11 +138,8 @@ pub async fn enqueue_qq_event(
     state:&Arc<AppState>,account:&str,source_key:&str,body:&Value
 )->Result<()>{
     let sealed=crypto::encrypt(&state.config.credential_key,body)?;
-    sqlx::query("INSERT OR IGNORE INTO qq_events_inbox
-        (source_key,account_id,sealed) VALUES (?,?,?)")
-        .bind(source_key).bind(account).bind(sealed)
-        .execute(&state.pool).await?;
-    Ok(())
+    durable_insert(state,InboxTable::QqEvents,source_key,account,&sealed,
+        MAX_PENDING_PER_ACCOUNT).await
 }
 
 pub async fn drain_qq_events(state:&Arc<AppState>,limit:i64)->Result<usize>{
@@ -166,10 +222,8 @@ pub async fn enqueue_telegram(
         "sender":sender,"text":text,"outgoing":outgoing,"reply_to":reply_to
     });
     let sealed=crypto::encrypt(&state.config.credential_key,&payload)?;
-    sqlx::query("INSERT OR IGNORE INTO telegram_events_inbox
-        (source_key,account_id,sealed) VALUES (?,?,?)")
-        .bind(&key).bind(account).bind(sealed).execute(&state.pool).await?;
-    Ok(())
+    durable_insert(state,InboxTable::Telegram,&key,account,&sealed,
+        MAX_PENDING_PER_ACCOUNT).await
 }
 
 pub async fn drain_telegram(state:&Arc<AppState>,limit:i64)->Result<usize>{
@@ -275,6 +329,48 @@ pub async fn queued_count(state:&Arc<AppState>)->Result<i64>{
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn bounded_inbox_rejects_new_events_but_allows_idempotent_redelivery(){
+        let path=std::env::temp_dir().join(format!(
+            "2bm-bounded-{}.db",uuid::Uuid::new_v4()));
+        let pool=crate::db::connect(&format!("sqlite://{}",path.display()))
+            .await.unwrap();
+        sqlx::query("INSERT INTO accounts
+            (id,platform,label,owner_mxid,credentials,enabled)
+            VALUES ('a','qq','test','@owner:host','secret',1)")
+            .execute(&pool).await.unwrap();
+        let state=Arc::new(AppState{
+            config:crate::config::Config{
+                admin_listen:"127.0.0.1:9000".parse().unwrap(),
+                matrix_listen:"127.0.0.1:9001".parse().unwrap(),
+                combined_listen:None,database_url:String::new(),
+                homeserver:String::new(),server_name:"host".into(),
+                as_token:String::new(),hs_token:String::new(),
+                admin_token:String::new(),credential_key:[6;32],
+            },pool,http:reqwest::Client::new(),
+            telegram:crate::telegram_user::Gateway::default(),
+            room_creation:tokio::sync::Mutex::new(()),
+            delivery_lock:tokio::sync::Mutex::new(()),
+            transaction_lock:tokio::sync::Mutex::new(()),
+        });
+        durable_insert(&state,InboxTable::QqOwn,"one","a","encrypted",2)
+            .await.unwrap();
+        durable_insert(&state,InboxTable::QqEvents,"two","a","encrypted",2)
+            .await.unwrap();
+        // Existing source-id remains acknowledged, even though capacity is full.
+        durable_insert(&state,InboxTable::QqOwn,"one","a","encrypted",2)
+            .await.unwrap();
+        assert!(durable_insert(&state,InboxTable::Telegram,
+            "three","a","encrypted",2).await.is_err());
+        let pending=queue_load(&state).await.unwrap();
+        assert_eq!(pending,vec![("a".into(),2)]);
+        assert!(durable_insert(&state,InboxTable::QqOwn,"giant","a",
+            &"x".repeat(MAX_ENVELOPE_BYTES+1),3).await.is_err());
+        state.pool.close().await;
+        drop(state);
+        let _=std::fs::remove_file(path);
+    }
+
     #[tokio::test]
     async fn telegram_durable_inbox_delivers_once_to_matrix(){
         use axum::{extract::State,http::StatusCode,routing::{get,post,put},
