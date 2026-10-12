@@ -4,6 +4,7 @@ mod crypto;
 mod db;
 mod delivery;
 mod matrix;
+mod inbox;
 mod telegram_user;
 mod relay;
 mod web;

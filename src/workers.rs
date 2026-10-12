@@ -14,6 +14,9 @@ pub async fn set_status(state:&Arc<AppState>, account_id:&str, status:&str)
 pub async fn run(state: Arc<AppState>) {
     let mut jobs: HashMap<String, (String, JoinHandle<()>)> = HashMap::new();
     loop {
+        if let Err(error)=crate::inbox::drain_qq_own(&state,40).await {
+            warn!(%error,"failed to drain persisted QQ self-message inbox");
+        }
         match db::accounts(&state.pool).await {
             Ok(accounts) => {
                 let active: HashMap<String, String> = accounts.iter()

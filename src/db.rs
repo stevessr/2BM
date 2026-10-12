@@ -123,6 +123,16 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
             account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
             next_offset INTEGER NOT NULL DEFAULT 0
         )",
+        "CREATE TABLE IF NOT EXISTS qq_own_inbox (
+            source_key TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            sealed TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_error TEXT
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_qq_own_inbox_received
+            ON qq_own_inbox(received_at)",
         "CREATE TABLE IF NOT EXISTS appservice_events (
             event_id TEXT PRIMARY KEY,
             handled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

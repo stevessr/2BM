@@ -569,19 +569,11 @@ async fn qq_hook(
     let text=adapters::qq::message_text(&body);
     let reply_to=adapters::qq::reply_target(&body);
     if own {
-        let source=state.clone();
-        let own_account=account_id.clone();
-        let own_chat=chat.clone();
-        let own_id=message_id.clone();
-        let own_text=text.to_owned();
-        tokio::spawn(async move {
-            if let Err(error)=relay::incoming_own(
-                &source,&own_account,&own_chat,&own_id,
-                &format!("qq-self:{own_account}"),"Me (QQ)",&own_text
-            ).await {
-                tracing::warn!(account=%own_account,%error,"QQ self message sync failed");
-            }
-        });
+        // Commit the authenticated webhook to encrypted SQLite before ACK.
+        // A separate worker reconciles it against Matrix after in-flight
+        // outbound requests finish, even when the process restarts.
+        crate::inbox::enqueue_qq_own(&state,&account_id,&chat,&message_id,&text)
+            .await.map_err(internal)?;
     } else {
         relay::incoming_with_reply(&state,&account_id,&chat,&message_id,
             &sender_id,sender,&text,reply_to.as_deref())
