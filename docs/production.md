@@ -212,3 +212,41 @@ runs independently, with up to 20 selected events per iteration and a
 20-second timeout per attempt. Rate limits and backlog handling are
 deliberately conservative; realistic production traffic and long outages
 still require load testing against the actual VPS.
+
+## Storage exhaustion and crash-state drills
+
+New inbound callback records are limited to 20,000 per account across all
+three encrypted inboxes, with a maximum 256 KiB encrypted payload each.
+These are protective maxima, NOT a disk quota. Combined ciphertext, SQLite
+WAL, Telegram session files, logs, OS metadata and backups may require
+substantially more space. Monitor free bytes/inodes and set an external alert
+well before filesystem exhaustion. `GET /api/admin/queues/capacity` returns
+per-account pressure; the WebUI shows it alongside the retry controls.
+
+HTTP webhook ACK means the event was durably inserted or already present.
+When storage exceeds per-account pressure, new QQ webhook messages respond
+503; an oversized encrypted event responds 413. These are *not* accepted:
+not every NapCat installation retries HTTP failures. Verify source retry
+behavior on the exact installed version and provide historical reconciliation
+for discarded source events. Existing duplicate callback IDs are accepted
+at capacity to avoid damaging upstream replay.
+
+Test a full queue, a corrupt encrypted row, a disabled account, Matrix
+outage, disk-full behavior, and a crash after a remote send before its receipt
+is committed. The last failure leaves a `delivery_attempts.status=sending`
+row: 2BM now rewrites these to `uncertain` during startup. Check the source
+conversation and resolve using the separate outbound-delivery incident UI.
+Do not simply delete SQLite journal entries to silence alarms.
+
+For Telegram personal accounts, encrypted inbox insertion precedes update
+state checkpoints, with a checkpoint every 64 accepted new messages and at
+graceful stream interruption when safe. A failed durable insertion prevents
+advancing the source cursor. This improves but does not establish exactly
+once delivery in the presence of upstream session changes or external
+Telegram authorization loss.
+
+Matrix alias recovery recognizes Synapse's 400/M_ROOM_IN_USE as well as
+equivalent 409/M_ROOM_IN_USE responses, then verifies the original signed
+m.room.create event sender and com.2bm.bridge event sender/content. A mapping
+will not recover if a different party controls that alias, which is preferable
+to cross-account chat disclosure.
