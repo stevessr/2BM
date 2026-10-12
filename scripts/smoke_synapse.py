@@ -224,7 +224,7 @@ def main():
             api("POST",AS,hook,{**msg,"message_id":458,
                 "raw_message":"Sensitive plaintext must not leak"}, "local-hook")
         except AssertionError as failure:
-            assert "HTTP 500" in str(failure),failure
+            assert ": 500 " in str(failure),failure
         else:
             raise AssertionError("bridge accepted plaintext after encryption marker")
         assert not any(e["content"].get("body")=="Sensitive plaintext must not leak"
