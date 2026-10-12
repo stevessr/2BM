@@ -1,0 +1,8 @@
+/target/
+/data/
+.env
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.idea/
+.DS_Store
