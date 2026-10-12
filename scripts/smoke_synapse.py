@@ -128,8 +128,13 @@ def main():
               "sender":{"nickname":"Me"}}
         api("POST",AS,hook,echo,"local-hook")
         time.sleep(1)
-        assert sum(1 for e in messages(owner,room) if e["type"]=="m.room.message"
-            and e["content"].get("body")=="Matrix response")==1
+        # The owner's Matrix reply includes a quoted fallback in its body.
+        # Only the original owner event may end in the reply text; there
+        # must not be an additional ghost echo with the same content.
+        matching=[e for e in messages(owner,room) if e["type"]=="m.room.message"
+            and e["content"].get("body","").endswith("Matrix response")]
+        assert len(matching)==1,matching
+        assert matching[0]["sender"]=="@owner:smoke.test",matching
 
         recall={"post_type":"notice","notice_type":"friend_recall",
                 "self_id":999,"user_id":123,"message_id":456}
