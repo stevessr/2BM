@@ -185,6 +185,70 @@ mod tests {
         (state,counter,task,path)
     }
 
+    #[tokio::test]
+    async fn matrix_qq_reply_uses_original_remote_id_and_is_idempotent() {
+        use axum::{extract::State,routing::post};
+        use std::sync::Mutex;
+
+        async fn send(
+            State(messages):State<Arc<Mutex<Vec<Value>>>>,Json(payload):Json<Value>
+        )->Json<Value> {
+            messages.lock().unwrap().push(payload);
+            Json(json!({"status":"ok","retcode":0,"data":{"message_id":200}}))
+        }
+        let messages=Arc::new(Mutex::new(Vec::<Value>::new()));
+        let router=Router::new()
+            .route("/send_group_msg",post(send))
+            .with_state(messages.clone());
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url=format!("http://{}",listener.local_addr().unwrap());
+        let server=tokio::spawn(async move {axum::serve(listener,router).await.unwrap();});
+
+        let (state,_,redaction_server,path)=harness().await;
+        let credentials=crate::crypto::encrypt(&state.config.credential_key,
+            &json!({"api_base":url,"access_token":"local-test"})).unwrap();
+        sqlx::query("UPDATE accounts SET credentials=? WHERE id='acct'")
+            .bind(credentials).execute(&state.pool).await.unwrap();
+        sqlx::query("INSERT INTO mappings(account_id,external_chat,matrix_room)
+            VALUES ('acct','group:42','!room:example.org')")
+            .execute(&state.pool).await.unwrap();
+        sqlx::query("INSERT INTO event_links
+            (account_id,external_chat,external_message,matrix_room,matrix_event,sender_mxid)
+            VALUES ('acct','group:42','123','!room:example.org','$quoted:example.org','@_2bm_p_sender:example.org')")
+            .execute(&state.pool).await.unwrap();
+        let event=json!({
+            "type":"m.room.message","event_id":"$new:example.org",
+            "sender":"@owner:example.org","room_id":"!room:example.org",
+            "content":{
+                "msgtype":"m.text",
+                "body":"> <ghost> quoted text\n\nresponse",
+                "m.relates_to":{"m.in_reply_to":{"event_id":"$quoted:example.org"}}
+            }
+        });
+        matrix_event(&state,&event).await.unwrap();
+        matrix_event(&state,&event).await.unwrap();
+        let received=messages.lock().unwrap();
+        assert_eq!(received.len(),1,"Matrix transaction replay must not re-send");
+        assert_eq!(received[0]["message"][0]["type"],"reply");
+        assert_eq!(received[0]["message"][0]["data"]["id"],"123");
+        assert_eq!(received[0]["message"][1]["data"]["text"],"response");
+        drop(received);
+
+        let edited=json!({
+            "type":"m.room.message","event_id":"$edit:example.org",
+            "sender":"@owner:example.org","room_id":"!room:example.org",
+            "content":{"msgtype":"m.text","body":"new content",
+                "m.relates_to":{"rel_type":"m.replace","event_id":"$new:example.org"}}
+        });
+        matrix_event(&state,&edited).await.unwrap();
+        assert_eq!(messages.lock().unwrap().len(),1);
+        state.pool.close().await;
+        redaction_server.abort();
+        server.abort();
+        drop(state);
+        let _=std::fs::remove_file(path);
+    }
+
     #[test]
     fn reply_fallback_is_removed_without_harming_regular_quotes() {
         assert_eq!(strip_reply_fallback("> <alice> first\n> quoted line\n\nsecond",true),"second");
