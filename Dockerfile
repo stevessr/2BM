@@ -10,7 +10,7 @@ COPY static static
 RUN cargo build --release
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libsqlite3-0 \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libsqlite3-0 curl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --create-home --home-dir /app bridge
 WORKDIR /app

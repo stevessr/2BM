@@ -99,6 +99,11 @@
       <button id="qqMembers">同步群成员</button>
     </section>
     <section class="panel">
+      <h2>发送故障与人工核对</h2>
+      <p class="muted">网络超时后，外部平台可能已经收到消息。为避免重复，2BM 会暂停这条消息的自动重试。请先在对应 QQ/Telegram 会话中检查消息：确认未发送再选“重试”，确认已发送则选“标记已送达”。操作有风险，不会自行判断平台是否收到。</p>
+      <div id="deliveryIssues"></div>
+    </section>
+    <section class="panel">
       <h2>手动房间映射（高级）</h2>
       <p class="muted">收到外部新会话时自动创建 Matrix 房间、邀请控制者及虚拟联系人；此处也可手动映射已有房间。</p>
       <div class="grid">
@@ -138,6 +143,7 @@
     accounts = await api('accounts');
     const mappings = await api('mappings');
     const virtualRooms = await api('virtual-rooms');
+    const deliveryIssues = await api('delivery-issues');
     $('accounts').replaceChildren();
     $('accountSelection').replaceChildren();
     $('tgAccount').replaceChildren();
@@ -187,6 +193,31 @@
       }
       $('virtualRooms').append(row);
     }
+    $('deliveryIssues').replaceChildren();
+    if (!deliveryIssues.length) {
+      const quiet = document.createElement('p');
+      quiet.className = 'muted';
+      quiet.textContent = '暂无需要人工处理的发送记录。';
+      $('deliveryIssues').append(quiet);
+    }
+    for (const issue of deliveryIssues) {
+      const row=document.createElement('div');
+      row.className='entry';
+      const content=document.createElement('span');
+      const source=accounts.find(a=>a.id===issue.account_id);
+      content.textContent=(source?.label||issue.account_id)+' · '+issue.external_chat+
+        ' · '+issue.status+' · '+issue.matrix_event+' · '+issue.updated_at;
+      const actions=document.createElement('span');
+      for (const [action,title] of [['retry','确认未发送 · 重试'],['acknowledge','确认已发送 · 跳过']]) {
+        const btn=document.createElement('button');
+        btn.className='secondary';
+        btn.textContent=title;
+        btn.addEventListener('click',()=>resolveDelivery(issue,action));
+        actions.append(btn);
+      }
+      row.append(content,actions);
+      $('deliveryIssues').append(row);
+    }
     $('mappings').replaceChildren();
     for (const mapping of mappings) {
       const account = accounts.find(a => a.id === mapping.account_id);
@@ -194,6 +225,21 @@
         ' · ' + mapping.external_chat + ' → ' + mapping.matrix_room,
         () => remove('mappings/', mapping.id));
     }
+  }
+  async function resolveDelivery(issue,action) {
+    const danger = action === 'retry'
+      ? '重新发送可能造成 QQ/Telegram 重复消息。请确认原消息没有发出。'
+      : '跳过可能丢失消息。请确认原消息已经发出。';
+    if (!confirm(danger + '\n确定处理 ' + issue.matrix_event + ' 吗？')) return;
+    try {
+      await api('delivery-issues/resolve',{method:'POST',body:JSON.stringify({
+        event_key:issue.event_key,action
+      })});
+      await refresh();
+      showMessage(action === 'retry'
+        ? '已解除发送锁定，待 Matrix Homeserver 重试事务。'
+        : '已记录人工确认送达，待 Matrix Homeserver 重试完成。');
+    } catch(e) {showMessage(e);}
   }
   function addRow(container, title, onDelete) {
     const row = document.createElement('div');

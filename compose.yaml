@@ -17,6 +17,17 @@ services:
       - "127.0.0.1:9001:9001"
     security_opt:
       - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--max-time", "8", "http://127.0.0.1:9001/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
 
 volumes:
   2bm-data:

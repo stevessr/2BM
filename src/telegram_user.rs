@@ -35,6 +35,32 @@ fn session_path(account_id: &str) -> Result<PathBuf> {
         .unwrap_or_else(|_| "data/telegram".into());
     Ok(PathBuf::from(base).join(format!("{uuid}.sqlite")))
 }
+
+/// Restrict Telegram MTProto authorization keys to the bridge's Unix account.
+/// These files remain unencrypted: access to this directory grants account
+/// access. Deploy on a private filesystem and encrypt storage/backups.
+async fn prepare_session_path(path:&std::path::Path)->Result<()>{
+    if let Some(parent)=path.parent(){
+        tokio::fs::create_dir_all(parent).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(parent,std::fs::Permissions::from_mode(0o700)).await?;
+        }
+    }
+    Ok(())
+}
+async fn protect_session_file(path:&std::path::Path)->Result<()>{
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(path,std::fs::Permissions::from_mode(0o600)).await?;
+    }
+    #[cfg(not(unix))]
+    { let _=path; }
+    Ok(())
+}
+
 pub async fn begin(state: &Arc<AppState>, account_id: &str, phone: &str) -> Result<&'static str> {
     let account = crate::db::account(&state.pool, account_id).await?
         .filter(|a| a.platform == "telegram_user")
@@ -45,8 +71,9 @@ pub async fn begin(state: &Arc<AppState>, account_id: &str, phone: &str) -> Resu
     let creds = crate::adapters::credentials(state, &account)?;
     let hash = crate::adapters::token(&creds, "api_hash")?;
     let path = session_path(account_id)?;
-    if let Some(parent) = path.parent() { tokio::fs::create_dir_all(parent).await?; }
-    let session = Arc::new(SqliteSession::open(path).await?);
+    prepare_session_path(&path).await?;
+    let session = Arc::new(SqliteSession::open(&path).await?);
+    protect_session_file(&path).await?;
     let SenderPool { runner, handle, .. } = SenderPool::new(session, api_id(&creds)?);
     let client = Client::new(handle);
     let runner = tokio::spawn(async move { let _ = runner.run().await; });
@@ -56,7 +83,10 @@ pub async fn begin(state: &Arc<AppState>, account_id: &str, phone: &str) -> Resu
         runner.abort();
         return Ok("ready");
     }
-    let token = client.request_login_code(phone, hash).await?;
+    let token = match client.request_login_code(phone, hash).await {
+        Ok(token)=>token,
+        Err(error)=>{runner.abort();return Err(error.into());}
+    };
     state.telegram.pending.lock().await.insert(account_id.to_string(),
         Pending { client, runner, phase: LoginPhase::Code(token) });
     Ok("code_sent")
@@ -196,12 +226,18 @@ pub async fn import_recent(
 
 pub async fn run(state: &Arc<AppState>, account_id: &str, credentials: &Value) -> Result<()> {
     let path = session_path(account_id)?;
-    let session = Arc::new(SqliteSession::open(path).await?);
+    prepare_session_path(&path).await?;
+    let session = Arc::new(SqliteSession::open(&path).await?);
+    protect_session_file(&path).await?;
     let SenderPool { runner, updates, handle } =
         SenderPool::new(session, api_id(credentials)?);
     let client = Client::new(handle.clone());
     let pool_task = tokio::spawn(async move { let _ = runner.run().await; });
-    if !client.is_authorized().await? { bail!("Telegram session is not authorized"); }
+    if !client.is_authorized().await? {
+        handle.quit();
+        let _=pool_task.await;
+        bail!("Telegram session is not authorized");
+    }
     // Populate peer cache for chats so sending back to contacts has the access hash.
     let mut dialogs = client.iter_dialogs();
     while let Some(_) = dialogs.next().await? {}
