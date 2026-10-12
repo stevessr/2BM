@@ -127,6 +127,7 @@ mod tests {
             telegram:crate::telegram_user::Gateway::default(),
             room_creation:tokio::sync::Mutex::new(()),
             delivery_lock:tokio::sync::Mutex::new(()),
+            transaction_lock:tokio::sync::Mutex::new(()),
         });
         begin(&state,"event:a","a","$evt","private:2").await.unwrap();
         assert!(begin(&state,"event:a","a","$evt","private:2").await.is_err());

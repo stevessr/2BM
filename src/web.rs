@@ -447,13 +447,30 @@ async fn transaction(
     Json(body): Json<Value>
 ) -> ApiResult<Json<Value>> {
     hs_check(&headers, &query, &state)?;
+    // Synapse may retry or send concurrent transactions. Serialize the entire
+    // application-service handler so check -> delivery -> checkpoint is atomic
+    // with respect to other handlers in this process.
+    let _guard=state.transaction_lock.lock().await;
     if db::has_key(&state.pool, "transactions", "txn_id", &txn).await.map_err(internal)? {
         return Ok(Json(json!({})));
     }
     let events = body["events"].as_array()
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "missing events array"))?;
     for event in events {
+        let event_id=event["event_id"].as_str();
+        if let Some(id)=event_id {
+            let seen:Option<i64>=sqlx::query_scalar(
+                "SELECT 1 FROM appservice_events WHERE event_id=? LIMIT 1"
+            ).bind(id).fetch_optional(&state.pool).await.map_err(internal)?;
+            if seen.is_some(){continue;}
+        }
         relay::matrix_event(&state, event).await.map_err(internal)?;
+        // Checkpoint each completed event. If a later event fails, Synapse
+        // retries the transaction but earlier events will not run again.
+        if let Some(id)=event_id {
+            sqlx::query("INSERT OR IGNORE INTO appservice_events(event_id) VALUES (?)")
+                .bind(id).execute(&state.pool).await.map_err(internal)?;
+        }
     }
     sqlx::query("INSERT OR IGNORE INTO transactions(txn_id) VALUES (?)")
         .bind(txn).execute(&state.pool).await.map_err(internal)?;

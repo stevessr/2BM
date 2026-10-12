@@ -290,6 +290,7 @@ mod tests {
             telegram:crate::telegram_user::Gateway::default(),
             room_creation:tokio::sync::Mutex::new(()),
             delivery_lock:tokio::sync::Mutex::new(()),
+            transaction_lock:tokio::sync::Mutex::new(()),
         });
         (state,counter,task,path)
     }

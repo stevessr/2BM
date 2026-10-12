@@ -220,6 +220,7 @@ mod tests {
             telegram:crate::telegram_user::Gateway::default(),
             room_creation:tokio::sync::Mutex::new(()),
             delivery_lock:tokio::sync::Mutex::new(()),
+            transaction_lock:tokio::sync::Mutex::new(()),
         });
         let chat=RemoteChat::new("group:987","Test Group",false,None);
         let (first,second)=tokio::join!(

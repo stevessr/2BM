@@ -123,6 +123,10 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
             account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
             next_offset INTEGER NOT NULL DEFAULT 0
         )",
+        "CREATE TABLE IF NOT EXISTS appservice_events (
+            event_id TEXT PRIMARY KEY,
+            handled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
         "CREATE TABLE IF NOT EXISTS transactions (
             txn_id TEXT PRIMARY KEY, handled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",
