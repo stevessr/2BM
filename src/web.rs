@@ -27,6 +27,8 @@ pub fn admin_router() -> Router<Arc<AppState>> {
         .route("/api/admin/accounts/{id}/telegram/history", post(telegram_history))
         .route("/api/admin/accounts/{id}/sync", post(sync_virtual_rooms))
         .route("/api/admin/virtual-rooms", get(list_virtual_rooms))
+        .route("/api/admin/delivery-issues",get(list_delivery_issues))
+        .route("/api/admin/delivery-issues/resolve",post(resolve_delivery_issue))
         .route("/api/admin/accounts/{id}/qq/members",post(sync_qq_members))
         .route("/api/admin/mappings", get(list_mappings).post(create_mapping))
         .route("/api/admin/mappings/{id}", delete(delete_mapping))
@@ -88,6 +90,33 @@ fn error(status: StatusCode, message: &str) -> ApiError {
 fn internal(err: impl std::fmt::Display) -> ApiError {
     tracing::error!(error = %err, "request failed");
     error(StatusCode::INTERNAL_SERVER_ERROR, "internal service error")
+}
+
+
+async fn list_delivery_issues(
+    State(state):State<Arc<AppState>>,headers:HeaderMap
+)->ApiResult<Json<Value>> {
+    admin_check(&headers,&state)?;
+    let issues=crate::delivery::list_unresolved(&state).await.map_err(internal)?;
+    Ok(Json(json!(issues)))
+}
+#[derive(Deserialize)]
+struct ResolveDeliveryIssue {
+    event_key:String,
+    action:String,
+}
+async fn resolve_delivery_issue(
+    State(state):State<Arc<AppState>>,headers:HeaderMap,
+    Json(request):Json<ResolveDeliveryIssue>
+)->ApiResult<Json<Value>> {
+    admin_check(&headers,&state)?;
+    if !matches!(request.action.as_str(),"retry"|"acknowledge") {
+        return Err(error(StatusCode::BAD_REQUEST,"action must be retry or acknowledge"));
+    }
+    let found=crate::delivery::resolve(&state,&request.event_key,&request.action)
+        .await.map_err(internal)?;
+    if !found {return Err(error(StatusCode::NOT_FOUND,"unresolved delivery not found"));}
+    Ok(Json(json!({"status":"resolved","action":request.action})))
 }
 
 async fn list_accounts(
@@ -465,9 +494,19 @@ async fn qq_hook(
         .or_else(|| body["message"].as_str())
         .unwrap_or_default();
     if own {
-        relay::incoming_own(&state,&account_id,&chat,&message_id,
-            &format!("qq-self:{account_id}"),"Me (QQ)",text)
-            .await.map_err(internal)?;
+        let source=state.clone();
+        let own_account=account_id.clone();
+        let own_chat=chat.clone();
+        let own_id=message_id.clone();
+        let own_text=text.to_owned();
+        tokio::spawn(async move {
+            if let Err(error)=relay::incoming_own(
+                &source,&own_account,&own_chat,&own_id,
+                &format!("qq-self:{own_account}"),"Me (QQ)",&own_text
+            ).await {
+                tracing::warn!(account=%own_account,%error,"QQ self message sync failed");
+            }
+        });
     } else {
         relay::incoming(&state,&account_id,&chat,&message_id,&sender_id,sender,text)
             .await.map_err(internal)?;

@@ -88,6 +88,17 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
             external_message TEXT NOT NULL,
             PRIMARY KEY(account_id,external_chat,external_message)
         )",
+        "CREATE TABLE IF NOT EXISTS delivery_attempts (
+            event_key TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            matrix_event TEXT NOT NULL,
+            external_chat TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('sending','uncertain','delivered')),
+            last_error TEXT,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_delivery_unresolved
+            ON delivery_attempts(status,updated_at)",
         "CREATE TABLE IF NOT EXISTS outgoing (
             event_key TEXT PRIMARY KEY, delivered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",

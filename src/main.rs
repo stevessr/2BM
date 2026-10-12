@@ -2,6 +2,7 @@ mod adapters;
 mod config;
 mod crypto;
 mod db;
+mod delivery;
 mod matrix;
 mod telegram_user;
 mod relay;

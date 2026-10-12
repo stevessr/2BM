@@ -135,6 +135,7 @@ pub async fn matrix_event(state: &Arc<AppState>, event: &Value) -> Result<()> {
         let Some(account) = db::account(&state.pool,&mapping.account_id).await? else { continue; };
         // A joined stranger cannot operate a foreign user's account.
         if !account.enabled || sender != account.owner_mxid { continue; }
+        crate::delivery::begin(state,&key,&account.id,event_id,&mapping.external_chat).await?;
         // Use a native QQ reply segment only when the quoted Matrix event
         // was actually bridged from THIS account and THIS external chat.
         let remote_reply=if let Some(reply_event)=reply_event {
@@ -146,26 +147,35 @@ pub async fn matrix_event(state: &Arc<AppState>, event: &Value) -> Result<()> {
                 .bind(room).bind(reply_event)
                 .fetch_optional(&state.pool).await?
         } else {None};
-        let remote_sent:Option<String>=match account.platform.as_str() {
-            "qq" => {
-                let secrets=adapters::credentials(state,&account)?;
-                crate::adapters::qq::send_reply_id(
-                    state,&secrets,&mapping.external_chat,body,
-                    remote_reply.as_deref()).await?
+        let outcome:Result<Option<String>>=async {
+            Ok(match account.platform.as_str() {
+                "qq" => {
+                    let secrets=adapters::credentials(state,&account)?;
+                    crate::adapters::qq::send_reply_id(
+                        state,&secrets,&mapping.external_chat,body,
+                        remote_reply.as_deref()).await?
+                }
+                "telegram_user" => Some(crate::telegram_user::send_with_id(
+                    state,&account.id,&mapping.external_chat,body).await?.to_string()),
+                _ => {
+                    adapters::send(state,&account,&mapping.external_chat,body).await?;
+                    None
+                }
+            })
+        }.await;
+        match outcome {
+            Ok(remote_sent)=>{
+                crate::delivery::complete(state,&key,&account.id,
+                    &mapping.external_chat,remote_sent.as_deref(),
+                    room,event_id,sender).await?;
             }
-            "telegram_user" => Some(crate::telegram_user::send_with_id(
-                state,&account.id,&mapping.external_chat,body).await?.to_string()),
-            _ => {adapters::send(state,&account,&mapping.external_chat,body).await?;None}
-        };
-        if let Some(remote_id)=remote_sent {
-            sqlx::query("INSERT OR IGNORE INTO event_links
-                (account_id,external_chat,external_message,matrix_room,matrix_event,sender_mxid)
-                VALUES (?,?,?,?,?,?)")
-                .bind(&account.id).bind(&mapping.external_chat).bind(&remote_id)
-                .bind(room).bind(event_id).bind(sender).execute(&state.pool).await?;
+            Err(error)=>{
+                crate::delivery::uncertain(state,&key,
+                    "External send failed or timed out; check remote delivery before retry").await?;
+                return Err(error);
+            }
         }
-        sqlx::query("INSERT OR IGNORE INTO outgoing(event_key) VALUES (?)")
-            .bind(key).execute(&state.pool).await?;
+
     }
     Ok(())
 }
