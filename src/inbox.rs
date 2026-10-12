@@ -253,6 +253,82 @@ pub async fn queued_count(state:&Arc<AppState>)->Result<i64>{
 mod tests {
     use super::*;
     #[tokio::test]
+    async fn telegram_durable_inbox_delivers_once_to_matrix(){
+        use axum::{extract::State,http::StatusCode,routing::{get,post,put},
+            Json,Router};
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        use serde_json::json;
+        async fn register()->Json<Value> {
+            Json(json!({"user_id":"@_2bm_p_test:example.org"}))
+        }
+        async fn ok()->Json<Value> {Json(json!({}))}
+        async fn no_encryption()->StatusCode {StatusCode::NOT_FOUND}
+        async fn send_message(State(sent):State<Arc<AtomicUsize>>)->Json<Value>{
+            sent.fetch_add(1,Ordering::SeqCst);
+            Json(json!({"event_id":"$durable:example.org"}))
+        }
+        let sent=Arc::new(AtomicUsize::new(0));
+        let router=Router::new()
+            .route("/_matrix/client/v3/register",post(register))
+            .route("/_matrix/client/v3/profile/{user}/displayname",put(ok))
+            .route("/_matrix/client/v3/join/{room}",post(ok))
+            .route("/_matrix/client/v3/rooms/{room}/state/m.room.encryption",
+                get(no_encryption))
+            .route("/_matrix/client/v3/rooms/{room}/send/m.room.message/{txn}",
+                put(send_message))
+            .with_state(sent.clone());
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url=format!("http://{}",listener.local_addr().unwrap());
+        let server=tokio::spawn(async move{
+            axum::serve(listener,router).await.unwrap();
+        });
+        let path=std::env::temp_dir().join(format!(
+            "2bm-telegram-inbox-integration-{}.sqlite",uuid::Uuid::new_v4()));
+        let pool=crate::db::connect(&format!("sqlite://{}",path.display()))
+            .await.unwrap();
+        sqlx::query("INSERT INTO accounts
+            (id,platform,label,owner_mxid,credentials,enabled)
+            VALUES ('t','telegram_user','TG','@owner:example.org','sealed',1)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO mappings(account_id,external_chat,matrix_room)
+            VALUES ('t','123','!room:example.org')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO virtual_chats(account_id,external_chat,title,direct)
+            VALUES ('t','123','Contact',1)")
+            .execute(&pool).await.unwrap();
+        let state=Arc::new(AppState{
+            config:crate::config::Config{
+                admin_listen:"127.0.0.1:9000".parse().unwrap(),
+                matrix_listen:"127.0.0.1:9001".parse().unwrap(),
+                combined_listen:None,database_url:String::new(),
+                homeserver:url,server_name:"example.org".into(),
+                as_token:"appservice".into(),hs_token:"homeserver".into(),
+                admin_token:"administrator".into(),credential_key:[9;32],
+            },
+            pool,http:reqwest::Client::new(),
+            telegram:crate::telegram_user::Gateway::default(),
+            room_creation:tokio::sync::Mutex::new(()),
+            delivery_lock:tokio::sync::Mutex::new(()),
+            transaction_lock:tokio::sync::Mutex::new(()),
+        });
+        enqueue_telegram(&state,"t","123","15","123","Contact",
+            "hello from MTProto",false,None).await.unwrap();
+        assert_eq!(drain_telegram(&state,10).await.unwrap(),1);
+        assert_eq!(sent.load(Ordering::SeqCst),1);
+        assert_eq!(telegram_pending_count(&state).await.unwrap(),0);
+        // A replayed MTProto update must dequeue cleanly without a second
+        // Matrix send (persistent source-key dedup survives restart).
+        enqueue_telegram(&state,"t","123","15","123","Contact",
+            "hello from MTProto",false,None).await.unwrap();
+        assert_eq!(drain_telegram(&state,10).await.unwrap(),1);
+        assert_eq!(sent.load(Ordering::SeqCst),1);
+        server.abort();
+        state.pool.close().await;
+        drop(state);
+        let _=std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
     async fn persist_duplicate_qq_webhooks_once_with_encrypted_payload(){
         let path=std::env::temp_dir().join(format!(
             "2bm-qq-inbox-{}.sqlite",uuid::Uuid::new_v4()));
