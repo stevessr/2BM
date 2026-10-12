@@ -9,6 +9,7 @@ services:
       BRIDGE_ADMIN_LISTEN: 0.0.0.0:9000
       BRIDGE_MATRIX_LISTEN: 0.0.0.0:9001
       BRIDGE_DATABASE_URL: sqlite:///data/2bm.sqlite
+      BRIDGE_TG_SESSION_DIR: /data/telegram
     volumes:
       - 2bm-data:/data
     ports:

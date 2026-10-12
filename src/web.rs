@@ -22,6 +22,8 @@ pub fn admin_router() -> Router<Arc<AppState>> {
         .route("/admin", get(admin_page))
         .route("/api/admin/accounts", get(list_accounts).post(create_account))
         .route("/api/admin/accounts/{id}", delete(delete_account))
+        .route("/api/admin/accounts/{id}/telegram/start", post(telegram_start))
+        .route("/api/admin/accounts/{id}/telegram/verify", post(telegram_verify))
         .route("/api/admin/mappings", get(list_mappings).post(create_mapping))
         .route("/api/admin/mappings/{id}", delete(delete_mapping))
 }
@@ -114,6 +116,13 @@ async fn create_account(
         return Err(error(StatusCode::BAD_REQUEST, "owner_mxid must be @user:server"));
     }
     match request.platform.as_str() {
+        "telegram_user" => {
+            if request.credentials["api_id"].as_i64().filter(|id| *id > 0).is_none()
+                || request.credentials["api_hash"].as_str().is_none_or(|s| s.len() < 20) {
+                return Err(error(StatusCode::BAD_REQUEST,
+                    "Telegram user requires api_id and api_hash from my.telegram.org"));
+            }
+        }
         "telegram" | "discord" => {
             if request.credentials["token"].as_str().is_none_or(|s| s.len() < 10) {
                 return Err(error(StatusCode::BAD_REQUEST, "bot token is required"));
@@ -135,13 +144,47 @@ async fn create_account(
     let id = Uuid::new_v4().to_string();
     let sealed = crypto::encrypt(&state.config.credential_key, &request.credentials)
         .map_err(internal)?;
+    let enabled = request.platform != "telegram_user";
     sqlx::query(
-        "INSERT INTO accounts(id,platform,label,owner_mxid,credentials,enabled) VALUES (?,?,?,?,?,1)"
-    ).bind(&id).bind(&request.platform).bind(&request.label).bind(&request.owner_mxid).bind(sealed)
+        "INSERT INTO accounts(id,platform,label,owner_mxid,credentials,enabled) VALUES (?,?,?,?,?,?)"
+    ).bind(&id).bind(&request.platform).bind(&request.label).bind(&request.owner_mxid).bind(sealed).bind(enabled)
         .execute(&state.pool).await.map_err(internal)?;
     Ok((StatusCode::CREATED, Json(json!({
-        "id": id, "platform": request.platform, "label": request.label, "owner_mxid": request.owner_mxid, "enabled": true
+        "id": id, "platform": request.platform, "label": request.label, "owner_mxid": request.owner_mxid, "enabled": enabled
     }))))
+}
+
+#[derive(Deserialize)]
+struct TelegramPhone {
+    phone: String,
+}
+async fn telegram_start(
+    State(state): State<Arc<AppState>>, headers: HeaderMap, Path(id): Path<String>,
+    Json(input): Json<TelegramPhone>,
+) -> ApiResult<Json<Value>> {
+    admin_check(&headers, &state)?;
+    if !input.phone.starts_with('+') || input.phone.len() > 25 {
+        return Err(error(StatusCode::BAD_REQUEST,"phone must include +country-code"));
+    }
+    let status = crate::telegram_user::begin(&state,&id,&input.phone).await
+        .map_err(|e| error(StatusCode::UNPROCESSABLE_ENTITY,&e.to_string()))?;
+    Ok(Json(json!({"status":status})))
+}
+#[derive(Deserialize)]
+struct TelegramVerification {
+    value: String,
+}
+async fn telegram_verify(
+    State(state): State<Arc<AppState>>, headers: HeaderMap, Path(id): Path<String>,
+    Json(input): Json<TelegramVerification>,
+) -> ApiResult<Json<Value>> {
+    admin_check(&headers, &state)?;
+    if input.value.trim().is_empty() || input.value.len() > 256 {
+        return Err(error(StatusCode::BAD_REQUEST,"verification is required"));
+    }
+    let status = crate::telegram_user::verify(&state,&id,&input.value).await
+        .map_err(|e| error(StatusCode::UNPROCESSABLE_ENTITY,&e.to_string()))?;
+    Ok(Json(json!({"status":status})))
 }
 
 async fn delete_account(
@@ -186,7 +229,7 @@ async fn create_mapping(
         .await.map_err(internal)?
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "account not found"))?;
     let valid_chat = match account.platform.as_str() {
-        "telegram" => request.external_chat.parse::<i64>().is_ok(),
+        "telegram" | "telegram_user" => request.external_chat.parse::<i64>().is_ok(),
         "discord" => request.external_chat.parse::<u64>().is_ok(),
         "qq" => adapters::qq::chat_id(&json!({
             "message_type": request.external_chat.split(':').next().unwrap_or(""),

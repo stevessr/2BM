@@ -43,18 +43,34 @@
     <section class="panel">
       <h2>接入账号</h2>
       <div class="grid">
-        <label>平台<select id="platform"><option value="qq">QQ 真人账号 · NapCat</option><option value="telegram">Telegram Bot 兼容模式</option><option value="discord">Discord Bot 官方模式</option></select></label>
+        <label>平台<select id="platform"><option value="qq">QQ 真人账号 · NapCat</option><option value="telegram_user">Telegram 真人账号 · MTProto</option><option value="telegram">Telegram Bot 兼容模式</option><option value="discord">Discord Bot 官方模式</option></select></label>
         <label>备注名称<input id="label" placeholder="我的账号" maxlength="100"></label><label>Matrix 控制者<input id="ownerMxid" placeholder="@me:example.org"></label>
       </div>
       <div id="botFields" class="grid"><label>Bot Token<input id="botToken" type="password" autocomplete="off"></label></div>
+      <div id="tgFields" class="grid hidden">
+        <label>Telegram API ID<input id="tgApiId" type="number" placeholder="my.telegram.org"></label>
+        <label>Telegram API Hash<input id="tgApiHash" type="password" autocomplete="off"></label>
+      </div>
       <div id="qqFields" class="grid hidden">
         <label>OneBot HTTP API<input id="qqBase" placeholder="http://napcat:3000"></label>
         <label>OneBot API Token<input id="qqApiToken" type="password"></label>
         <label>Webhook Secret<input id="qqSecret" type="password" placeholder="单独生成随机密钥"></label>
       </div>
       <button id="addAccount">保存账号</button>
-      <p class="muted">QQ 使用在 NapCat 登录的真人账号；Telegram/Discord 目前仅有 Bot 兼容模式，不是个人账号。</p>
+      <p class="muted">QQ 使用在 NapCat 登录的真人账号；Telegram 真人账号通过 MTProto 验证码登录；Discord 仅提供官方 Bot 模式。</p>
       <div id="accounts"></div>
+      <h2>Telegram 真人账号登录</h2>
+      <p class="muted">先添加 Telegram 真人账号；通过手机验证码与可选两步验证登录，登录会话仅保存在服务器，不会将验证码存储在浏览器。</p>
+      <div class="grid">
+        <label>选择 Telegram 账号<select id="tgAccount"></select></label>
+        <label>国际格式手机号<input id="tgPhone" autocomplete="tel" placeholder="+8613800000000"></label>
+      </div>
+      <button id="tgStart">请求登录验证码</button>
+      <div class="grid" style="margin-top:14px">
+        <label>Telegram 验证码<input id="tgCode" autocomplete="one-time-code"></label>
+        <label>两步验证密码（需要时）<input id="tgPassword" type="password" autocomplete="off"></label>
+      </div>
+      <div class="row"><button id="tgVerify">提交验证码</button><button id="tg2fa" class="secondary">提交两步验证密码</button></div>
     </section>
     <section class="panel">
       <h2>房间映射</h2>
@@ -97,11 +113,17 @@
     const mappings = await api('mappings');
     $('accounts').replaceChildren();
     $('accountSelection').replaceChildren();
+    $('tgAccount').replaceChildren();
     for (const account of accounts) {
       const option = document.createElement('option');
       option.value = account.id;
       option.textContent = account.label + ' (' + account.platform + ')';
       $('accountSelection').append(option);
+      if (account.platform === 'telegram_user') {
+        const tgOption = option.cloneNode(true);
+        tgOption.textContent += account.enabled ? ' · 已验证' : ' · 待验证';
+        $('tgAccount').append(tgOption);
+      }
       addRow($('accounts'), account.label + ' · ' + account.platform + ' · ' + account.owner_mxid + ' · ' + account.id,
         () => remove('accounts/', account.id));
     }
@@ -147,20 +169,38 @@
   });
   $('platform').addEventListener('change', () => {
     const isQq = $('platform').value === 'qq';
+    const isTg = $('platform').value === 'telegram_user';
     $('qqFields').classList.toggle('hidden', !isQq);
-    $('botFields').classList.toggle('hidden', isQq);
+    $('tgFields').classList.toggle('hidden', !isTg);
+    $('botFields').classList.toggle('hidden', isQq || isTg);
   });
   $('addAccount').addEventListener('click', async () => {
     try {
       const platform = $('platform').value;
       const credentials = platform === 'qq'
         ? {api_base: $('qqBase').value.trim(), access_token: $('qqApiToken').value, hook_secret: $('qqSecret').value}
-        : {token: $('botToken').value};
+        : platform === 'telegram_user'
+          ? {api_id: Number($('tgApiId').value), api_hash:$('tgApiHash').value}
+          : {token: $('botToken').value};
       await api('accounts', {method:'POST', body:JSON.stringify({platform, label:$('label').value, owner_mxid:$('ownerMxid').value.trim(), credentials})});
-      for (const field of ['botToken','qqApiToken','qqSecret']) $(field).value = '';
+      for (const field of ['botToken','qqApiToken','qqSecret','tgApiHash']) $(field).value = '';
       await refresh(); showMessage();
     } catch(err) { showMessage(err); }
   });
+  async function tgLogin(action, value) {
+    const id = $('tgAccount').value;
+    if (!id) { showMessage('请先添加 Telegram 真人账号'); return; }
+    try {
+      const result = await api('accounts/' + encodeURIComponent(id) + '/telegram/' + action, {
+        method:'POST', body:JSON.stringify(action === 'start' ? {phone:value} : {value})
+      });
+      showMessage('Telegram 登录状态：' + result.status);
+      if (result.status === 'ready') await refresh();
+    } catch(err) { showMessage(err); }
+  }
+  $('tgStart').addEventListener('click', () => tgLogin('start',$('tgPhone').value.trim()));
+  $('tgVerify').addEventListener('click', () => tgLogin('verify',$('tgCode').value.trim()));
+  $('tg2fa').addEventListener('click', () => tgLogin('verify',$('tgPassword').value));
   $('addMapping').addEventListener('click', async () => {
     try {
       await api('mappings', {method:'POST', body:JSON.stringify({

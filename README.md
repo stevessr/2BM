@@ -2,7 +2,7 @@
 
 A modular **Rust Matrix Application Service bridge** with a lightweight, independently served account-management WebUI.
 
-**Status: experimental MVP; QQ human account puppeting; Telegram/Discord currently bot compatibility mode.** Plain-text messages can travel in both directions after configuration. 2BM is **not a Matrix homeserver** and requires Synapse or another homeserver supporting Application Services.
+**Status: experimental MVP; QQ and Telegram have human-account modes; Discord only supports the official bot mode.** Plain-text messages can travel in both directions after configuration. 2BM is **not a Matrix homeserver** and requires Synapse or another homeserver supporting Application Services.
 
 ## Components and ports
 
@@ -10,7 +10,7 @@ A modular **Rust Matrix Application Service bridge** with a lightweight, indepen
 - **Admin listener** (default `127.0.0.1:9000`): serves `/admin` and protected `/api/admin/*` API.
 - **Combined listener**: set `BRIDGE_COMBINED_LISTEN=0.0.0.0:9000` (or set both listener addresses equal) to serve both APIs on one port.
 - **Persistence**: SQLite with encrypted account credentials, room mappings, message deduplication and Telegram offsets.
-- **Background adapters**: Telegram Bot API long polling, Discord bot Gateway; QQ OneBot 11 HTTP event callback.
+- **Background adapters**: Telegram personal MTProto via Rust grammers (with WebUI phone-code/2FA authentication), legacy Telegram Bot API polling, Discord Bot Gateway; QQ OneBot 11 HTTP event callback.
 
 ## Quick start
 
@@ -30,9 +30,9 @@ Accounts and external chats are mapped to Matrix rooms. Incoming messages appear
 | Discord | Gateway `MESSAGE_CREATE` | REST channel message | Discord channel snowflake |
 | QQ | OneBot 11 HTTP webhook | OneBot 11 HTTP API | `group:123456` or `private:123456` |
 
-**Telegram (currently BOT mode, personal account support is not yet implemented)**: Create a bot in BotFather, add it to your chats, and configure its privacy settings and message access as needed. Do not poll the same bot token elsewhere.
+**Telegram Bot compatibility mode:** Create a bot in BotFather, add it to your chats, and configure its privacy settings and message access as needed. Do not poll the same bot token elsewhere.
 
-**Discord (currently BOT mode; ordinary user automation violates Discord policy)**: Create an application/bot and grant it read/send access. Enable the privileged **Message Content Intent** to receive message content. Use a bot token, not a user token.
+**Telegram personal account (Rust MTProto):** Create an API ID and API hash at my.telegram.org. In WebUI choose **Telegram 真人账号**, set the owner Matrix ID and the API credentials, then in the Telegram login section send the verification code to your phone and enter it, followed by your 2FA password if prompted. Verified accounts automatically reconnect on restart using the saved session SQLite file. Telegram session files contain authorization keys and must be kept private.\n\n**Discord (currently BOT mode; ordinary user automation violates Discord policy)**: Create an application/bot and grant it read/send access. Enable the privileged **Message Content Intent** to receive message content. Use a bot token, not a user token.
 
 **QQ (HUMAN account)**: Perform QQ login in **NapCat or another OneBot 11-compatible connector**. In WebUI, supply `api_base` (e.g. `http://napcat:3000`), `access_token`, and `hook_secret`. Configure OneBot HTTP event delivery to:
 
@@ -57,10 +57,10 @@ The account ID is visible in WebUI. Some OneBot connectors use their API token a
 | `BRIDGE_MATRIX_HS_TOKEN` | Homeserver token matching registration |
 | `BRIDGE_ADMIN_TOKEN` | Admin REST API Bearer token (min 24 chars) |
 | `BRIDGE_CREDENTIAL_KEY` | XChaCha20-Poly1305 encryption key (64 hex characters) |
-| `BRIDGE_DATABASE_URL` | SQLite URL, default `sqlite://data/2bm.sqlite` |
+| `BRIDGE_DATABASE_URL` | SQLite URL, default `sqlite://data/2bm.sqlite` |\n| `BRIDGE_TG_SESSION_DIR` | Telegram personal MTProto session directory (protect as highly sensitive) |
 | `RUST_LOG` | Runtime log filter |
 
-Back up **both** SQLite and the key: the encrypted account credentials cannot be recovered without the key. Admin credentials must be protected by HTTPS when accessed remotely. Docker Compose exposes both ports on localhost only by default; adjust networking for your homeserver/OneBot connector.
+**Telegram MTProto session files are currently unencrypted SQLite storage, separate from encrypted account settings**. Restrict filesystem permissions, keep backups private, and do not expose the session directory through the WebUI. Back up **both** SQLite and the key: the encrypted account credentials cannot be recovered without the key. Admin credentials must be protected by HTTPS when accessed remotely. Docker Compose exposes both ports on localhost only by default; adjust networking for your homeserver/OneBot connector.
 
 ## Available endpoints
 
@@ -74,7 +74,7 @@ The admin REST API requires `Authorization: Bearer $BRIDGE_ADMIN_TOKEN`.
 
 **Implemented:** plaintext message bridging; account management; split/combined HTTP listeners; encrypted credentials at rest; SQLite room mappings, incoming deduplication and Matrix transaction deduplication; Telegram poll offsets; Discord Gateway reconnect; simple OneBot HTTP integration.
 
-**Not yet implemented:** Telegram human MTProto login (TDLib/grammers), Discord human login (official API does not support self-bots), Matrix E2EE, full ghost/puppeting identities, QQ QR login inside 2BM, file/media transfer, historical sync, message edits/deletes/reactions/replies, presence/typing/read receipts, Discord Gateway resume, HA multi-replica mode or full Matrix third-party lookups. Only standard plaintext messages and captions are handled.
+**Not yet implemented:** full Telegram dialogs discovery and backfill, Discord human login (official API does not support self-bots), Matrix E2EE, full ghost/puppeting identities, QQ QR login inside 2BM, file/media transfer, historical sync, message edits/deletes/reactions/replies, presence/typing/read receipts, Discord Gateway resume, HA multi-replica mode or full Matrix third-party lookups. Only standard plaintext messages and captions are handled.
 
 Relaying uses one Matrix bot identity `@_2bm:server` with a source prefix. External outbound delivery is at-least-once across crashes between network delivery and local acknowledgement. Avoid running multiple replicas using the same account and database.
 
