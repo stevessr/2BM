@@ -106,12 +106,29 @@ pub async fn ensure_ghost_in_room(state:&Arc<AppState>,room:&str,ghost:&str)->Re
     }
     join_ghost(state,room,ghost).await
 }
-pub async fn send_as(state:&Arc<AppState>,room:&str,body:&str,txn:&str,mxid:&str)->Result<()>{
-    state.http.put(format!("{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+pub async fn send_as(state:&Arc<AppState>,room:&str,body:&str,txn:&str,mxid:&str)->Result<String>{
+    let response = state.http.put(format!("{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
         state.config.homeserver,urlencoding::encode(room),urlencoding::encode(txn)))
         .bearer_auth(&state.config.as_token)
         .query(&[("user_id",mxid)])
         .json(&json!({"msgtype":"m.text","body":body}))
+        .send().await?.error_for_status()?;
+    let data:Value=response.json().await?;
+    data["event_id"].as_str().map(str::to_owned)
+        .ok_or_else(||anyhow::anyhow!("Matrix send message has no event_id"))
+}
+
+/// A ghost can redact messages it originally sent, including when it has no
+/// power to redact other group members' messages.
+pub async fn redact_as(
+    state:&Arc<AppState>,room:&str,event:&str,txn:&str,sender:&str
+)->Result<()>{
+    state.http.put(format!("{}/_matrix/client/v3/rooms/{}/redact/{}/{}",
+        state.config.homeserver,urlencoding::encode(room),
+        urlencoding::encode(event),urlencoding::encode(txn)))
+        .bearer_auth(&state.config.as_token)
+        .query(&[("user_id",sender)])
+        .json(&json!({"reason":"Removed on the source network"}))
         .send().await?.error_for_status()?;
     Ok(())
 }

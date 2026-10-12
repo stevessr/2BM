@@ -70,6 +70,17 @@ pub async fn list_chats(state: &Arc<AppState>, account: &Account) -> Result<Vec<
     Ok(chats)
 }
 
+pub fn recall_target(event:&Value)->Option<(String,String)>{
+    let msg=event["message_id"].as_i64().map(|id|id.to_string())
+        .or_else(||event["message_id"].as_str().map(str::to_owned))?;
+    let chat=match event["notice_type"].as_str()? {
+        "group_recall" => format!("group:{}",event["group_id"].as_i64()?),
+        "friend_recall" => format!("private:{}",event["user_id"].as_i64()?),
+        _ => return None,
+    };
+    Some((chat,msg))
+}
+
 pub fn chat_id(event: &Value) -> Option<String> {
     match event["message_type"].as_str()? {
         "group" => event["group_id"].as_i64().map(|id| format!("group:{id}")),
@@ -81,6 +92,14 @@ pub fn chat_id(event: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn classify_onebot_recall_events() {
+        assert_eq!(recall_target(&json!({"notice_type":"group_recall","group_id":25,"message_id":14})),
+            Some(("group:25".into(),"14".into())));
+        assert_eq!(recall_target(&json!({"notice_type":"friend_recall","user_id":99,"message_id":12})),
+            Some(("private:99".into(),"12".into())));
+        assert_eq!(recall_target(&json!({"notice_type":"poke","user_id":99,"message_id":12})),None);
+    }
     #[test]
     fn classify_onebot_chats() {
         assert_eq!(chat_id(&json!({"message_type":"group","group_id":456})), Some("group:456".into()));

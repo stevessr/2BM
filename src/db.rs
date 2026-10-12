@@ -64,6 +64,24 @@ pub async fn connect(database_url: &str) -> Result<SqlitePool> {
         "CREATE TABLE IF NOT EXISTS incoming (
             source_key TEXT PRIMARY KEY, delivered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",
+        "CREATE TABLE IF NOT EXISTS event_links (
+            account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            external_chat TEXT NOT NULL,
+            external_message TEXT NOT NULL,
+            matrix_room TEXT NOT NULL,
+            matrix_event TEXT NOT NULL,
+            sender_mxid TEXT NOT NULL,
+            redacted INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(account_id,external_chat,external_message)
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_event_links_matrix
+            ON event_links(matrix_room,matrix_event)",
+        "CREATE TABLE IF NOT EXISTS recall_tombstones (
+            account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            external_chat TEXT NOT NULL,
+            external_message TEXT NOT NULL,
+            PRIMARY KEY(account_id,external_chat,external_message)
+        )",
         "CREATE TABLE IF NOT EXISTS outgoing (
             event_key TEXT PRIMARY KEY, delivered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )",

@@ -370,6 +370,12 @@ async fn qq_hook(
     if !authorized(&headers, &HashMap::new(), expected) {
         return Err(error(StatusCode::UNAUTHORIZED, "invalid OneBot webhook token"));
     }
+    if body["post_type"] == "notice" {
+        if let Some((chat,id)) = crate::adapters::qq::recall_target(&body) {
+            relay::recall(&state,&account_id,&chat,&id).await.map_err(internal)?;
+        }
+        return Ok(Json(json!({})));
+    }
     if body["post_type"] != "message" { return Ok(Json(json!({}))); }
     let Some(chat) = adapters::qq::chat_id(&body) else { return Ok(Json(json!({}))); };
     let message_id = body["message_id"].as_str()
