@@ -208,6 +208,28 @@ def main():
                 "Sent from another QQ device"),None),"self-first actual message")
         assert self_first["sender"].startswith("@_2bm_p_"),self_first
         assert self_first["sender"]!=expected,"self message impersonated contact"
+        # An appservice encryption state event must quarantine the room:
+        # forwarding QQ plaintext into a room flagged encrypted is forbidden.
+        as_auth=os.environ["BRIDGE_MATRIX_HS_TOKEN"]
+        api("PUT",AS,"/_matrix/app/v1/transactions/qa-encryption-warning",
+            {"events":[{
+                "type":"m.room.encryption",
+                "event_id":"$qa-encrypted-event",
+                "room_id":room,
+                "state_key":"",
+                "sender":"@owner:smoke.test",
+                "content":{"algorithm":"m.megolm.v1.aes-sha2"}
+            }]},as_auth)
+        try:
+            api("POST",AS,hook,{**msg,"message_id":458,
+                "raw_message":"Sensitive plaintext must not leak"}, "local-hook")
+        except AssertionError as failure:
+            assert "HTTP 500" in str(failure),failure
+        else:
+            raise AssertionError("bridge accepted plaintext after encryption marker")
+        assert not any(e["content"].get("body")=="Sensitive plaintext must not leak"
+            for e in messages(owner,room) if e["type"]=="m.room.message")
+
         print("PASS Synapse/2BM/OneBot: virtual room, replies, dedup, recalls, self-first DM")
     finally:
         server.shutdown()
