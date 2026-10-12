@@ -4,6 +4,14 @@ A modular **Rust Matrix Application Service bridge** with a lightweight, indepen
 
 **Status: experimental MVP; QQ and Telegram have human-account modes; Discord only supports the official bot mode.** Plain-text messages can travel in both directions after configuration. 2BM is **not a Matrix homeserver** and requires Synapse or another homeserver supporting Application Services.
 
+## Production deployment and release criteria
+
+**2BM is not yet approved for production use.** See [the production runbook](docs/production.md) for deployment, TLS, session protection, backups, manual delivery reconciliation and a required real-account release checklist.
+
+CI now includes a [real Synapse integration workflow](.github/workflows/synapse-integration.yml) with a local OneBot stub. This exercises the actual Matrix appservice protocol but does not replace testing with genuine NapCat/QQ and Telegram accounts.
+
+Admin APIs also expose per-account adapter state, pending/uncertain outbound deliveries and encrypted-room warnings. Matrix E2EE is **not** supported: enabling encryption on a bridged room blocks plaintext forwarding and records an operator warning.
+
 ## Components and ports
 
 - **Matrix AS listener** (default `127.0.0.1:9001`): receives `/_matrix/app/v1/transactions/{txn}` and QQ OneBot webhook events at `/hooks/qq/{account-id}`.
