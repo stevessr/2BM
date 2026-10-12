@@ -155,7 +155,35 @@ def main():
         until(lambda:api("GET",HS,
             f"/_matrix/client/v3/rooms/{rid}/event/{origin}",token=owner)
             .get("content")=={},"ghost redaction")
-        print("PASS Synapse/2BM/OneBot: virtual room, ghost, reply, echo suppression, recall")
+        # A self-authored message arriving before any contact message must
+        # create a DM owned by the *contact* ghost, not the self ghost.
+        second=api("POST",ADMIN,"/api/admin/accounts",{
+            "platform":"qq","label":"Self-first DM test",
+            "owner_mxid":"@owner:smoke.test",
+            "credentials":{"api_base":"http://127.0.0.1:3010",
+                "access_token":"local-onebot","hook_secret":"local-hook"}},admin)["id"]
+        second_hook=f"/hooks/qq/{second}"
+        api("POST",AS,second_hook,{
+            "post_type":"message_sent","message_type":"private",
+            "self_id":999,"user_id":999,"target_id":123,
+            "message_id":9010,"raw_message":"Sent from another QQ device"
+        },"local-hook")
+        second_room=until(lambda:next(
+            (m["matrix_room"] for m in api("GET",ADMIN,"/api/admin/mappings",
+                token=admin) if m["account_id"]==second and
+                m["external_chat"]=="private:123"),None),"self-first Matrix room")
+        from uuid import uuid5,NAMESPACE_URL
+        expected="@_2bm_p_"+uuid5(NAMESPACE_URL,f"{second}:123").hex+":smoke.test"
+        created=api("GET",HS,f"/_matrix/client/v3/rooms/{quote(second_room,safe='')}/state/m.room.create",
+            token=owner)
+        # /state returns content, not the event envelope; query /messages for
+        # the m.room.create event after joining the invited owner.
+        api("POST",HS,f"/_matrix/client/v3/join/{quote(second_room,safe='')}",{},owner)
+        creation=next(e for e in messages(owner,second_room) if e["type"]=="m.room.create")
+        assert creation["sender"]==expected,creation
+        names=[e for e in messages(owner,second_room) if e["type"]=="m.room.name"]
+        assert names and not names[-1]["content"]["name"].startswith("Me ("),names
+        print("PASS Synapse/2BM/OneBot: virtual room, replies, dedup, recalls, self-first DM")
     finally:
         server.shutdown()
         server.server_close()
