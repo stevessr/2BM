@@ -208,6 +208,28 @@ def main():
                 "Sent from another QQ device"),None),"self-first actual message")
         assert self_first["sender"].startswith("@_2bm_p_"),self_first
         assert self_first["sender"]!=expected,"self message impersonated contact"
+        # Crash-style recovery from a lost SQLite mapping must adopt only
+        # the original room, verified using its creator + bridge state sender.
+        import sqlite3
+        database_path=os.environ["BRIDGE_DATABASE_URL"].removeprefix("sqlite://")
+        with sqlite3.connect(database_path,timeout=10) as database:
+            database.execute("DELETE FROM mappings WHERE account_id=? AND external_chat=?",
+                (second,"private:123"))
+        api("POST",AS,second_hook,{
+            "post_type":"message","message_type":"private",
+            "self_id":999,"user_id":123,"message_id":9012,
+            "raw_message":"Recovered alias with trusted creator",
+            "sender":{"nickname":"Alice"}
+        },"local-hook")
+        recovered=until(lambda:next(
+            (m["matrix_room"] for m in api("GET",ADMIN,"/api/admin/mappings",
+                token=admin) if m["account_id"]==second and
+                m["external_chat"]=="private:123"),None),"verified alias recovery")
+        assert recovered==second_room,(recovered,second_room)
+        until(lambda:any(e["type"]=="m.room.message" and
+            e["content"].get("body")=="Recovered alias with trusted creator"
+            for e in messages(owner,second_room)),"recovered room message")
+
         pressure=api("GET",ADMIN,"/api/admin/queues/capacity",token=admin)
         assert pressure["max_per_account"]==20000,pressure
         # Enforce resource limits *before ACK*; large OneBot callbacks must
