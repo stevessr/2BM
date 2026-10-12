@@ -15,6 +15,7 @@ pub async fn send(state: &Arc<AppState>, account: &Account, chat: &str, text: &s
     let secrets = credentials(state, account)?;
     match account.platform.as_str() {
         "telegram" => telegram::send(state, &secrets, chat, text).await,
+        "telegram_user" => crate::telegram_user::send(state, &account.id, chat, text).await,
         "discord" => discord::send(state, &secrets, chat, text).await,
         "qq" => qq::send(state, &secrets, chat, text).await,
         other => bail!("unsupported adapter {other}"),

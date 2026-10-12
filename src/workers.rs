@@ -9,7 +9,7 @@ pub async fn run(state: Arc<AppState>) {
         match db::accounts(&state.pool).await {
             Ok(accounts) => {
                 let active: HashMap<String, String> = accounts.iter()
-                    .filter(|a| a.enabled && matches!(a.platform.as_str(), "telegram" | "discord"))
+                    .filter(|a| a.enabled && matches!(a.platform.as_str(), "telegram" | "telegram_user" | "discord"))
                     .map(|a| (a.id.clone(), format!("{}:{}", a.platform, a.credentials)))
                     .collect();
                 let stale: HashSet<_> = jobs.iter()
@@ -19,6 +19,7 @@ pub async fn run(state: Arc<AppState>) {
                     .collect();
                 for id in stale {
                     if let Some((_, task)) = jobs.remove(&id) { task.abort(); }
+                    state.telegram.live.write().await.remove(&id);
                 }
                 for account in accounts {
                     if !active.contains_key(&account.id) || jobs.contains_key(&account.id) { continue; }
@@ -34,6 +35,7 @@ pub async fn run(state: Arc<AppState>) {
                         loop {
                             let result = match account.platform.as_str() {
                                 "telegram" => adapters::telegram::poll(&service, &id, &secrets).await,
+                                "telegram_user" => crate::telegram_user::run(&service, &id, &secrets).await,
                                 "discord" => adapters::discord::gateway(&service, &id, &secrets).await,
                                 _ => break,
                             };

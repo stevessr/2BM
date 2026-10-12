@@ -3,6 +3,7 @@ mod config;
 mod crypto;
 mod db;
 mod matrix;
+mod telegram_user;
 mod relay;
 mod web;
 mod workers;
@@ -18,6 +19,7 @@ pub struct AppState {
     pub config: Config,
     pub pool: SqlitePool,
     pub http: reqwest::Client,
+    pub telegram: telegram_user::Gateway,
 }
 
 #[tokio::main]
@@ -39,7 +41,7 @@ async fn main() -> Result<()> {
         .timeout(Duration::from_secs(35))
         .user_agent("2BM/0.1")
         .build()?;
-    let state = Arc::new(AppState { config, pool, http });
+    let state = Arc::new(AppState { config, pool, http, telegram: telegram_user::Gateway::default() });
 
     if let Err(error) = matrix::register_bot(&state).await {
         warn!(%error, "Matrix bot registration failed; check appservice registration");
