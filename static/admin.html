@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2BM | Bridge Control</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, sans-serif; background: #0c101a; color: #f1f5fc; }
+    * { box-sizing: border-box; }
+    body { margin: 0 auto; max-width: 1050px; padding: 32px 18px 70px; }
+    header { display: flex; align-items: center; gap: 18px; margin-bottom: 26px; }
+    h1 { font-size: 30px; letter-spacing: -.035em; margin: 0; }
+    h2 { margin: 0 0 18px; font-size: 18px; }
+    .muted { color: #a4b1c8; font-size: 14px; }
+    .panel { background: #171e2b; border: 1px solid #303d52; border-radius: 16px; padding: 23px; margin: 20px 0; }
+    input, select, button { font: inherit; border-radius: 8px; padding: 11px 13px; }
+    input, select { color: #f8fafc; background: #0e1521; border: 1px solid #40506a; min-width: 0; width: 100%; }
+    label { color: #bac9dd; display: grid; gap: 6px; font-size: 14px; }
+    button { border: none; background: #6da6ff; color: #081321; cursor: pointer; font-weight: 650; }
+    button.secondary { color: #e5edfa; background: #36465e; }
+    button.danger { background: #492831; color: #ffb5be; }
+    button:disabled { opacity: .5; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 13px; margin-bottom: 15px; }
+    .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .entry { border-top: 1px solid #334155; padding: 13px 0; display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+    .entry code { overflow-wrap: anywhere; }
+    #message { min-height: 24px; color: #ffcf82; }
+    code { background: #101726; padding: 2px 5px; border-radius: 4px; }
+    .hidden { display: none; }
+    footer { margin-top: 25px; font-size: 12px; color: #94a3b8; }
+    @media(max-width: 600px) { body { padding-top: 20px; } .panel { padding: 16px; } }
+  </style>
+</head>
+<body>
+  <header><div style="font-size:38px">⇄</div><div><h1>2BM Bridge Control</h1><div class="muted">Telegram · QQ/OneBot · Discord ↔ Matrix</div></div></header>
+  <section class="panel" id="login">
+    <h2>管理员登录</h2>
+    <div class="grid"><label>BRIDGE_ADMIN_TOKEN<input id="token" type="password" autocomplete="off" placeholder="输入服务器管理员令牌"></label></div>
+    <div class="row"><button id="loginButton">登录</button><span class="muted">令牌仅保存在当前浏览器标签页会话中。</span></div>
+  </section>
+  <main id="dashboard" class="hidden">
+    <div class="row"><strong>Bridge administration</strong><button id="logout" class="secondary">退出登录</button></div>
+    <section class="panel">
+      <h2>接入账号</h2>
+      <div class="grid">
+        <label>平台<select id="platform"><option value="qq">QQ 真人账号 · NapCat</option><option value="telegram_user">Telegram 真人账号 · MTProto</option><option value="telegram">Telegram Bot 兼容模式</option><option value="discord">Discord Bot 官方模式</option></select></label>
+        <label>备注名称<input id="label" placeholder="我的账号" maxlength="100"></label><label>Matrix 控制者<input id="ownerMxid" placeholder="@me:example.org"></label>
+      </div>
+      <div id="botFields" class="grid"><label>Bot Token<input id="botToken" type="password" autocomplete="off"></label></div>
+      <div id="tgFields" class="grid hidden">
+        <label>Telegram API ID<input id="tgApiId" type="number" placeholder="my.telegram.org"></label>
+        <label>Telegram API Hash<input id="tgApiHash" type="password" autocomplete="off"></label>
+      </div>
+      <div id="qqFields" class="grid hidden">
+        <label>OneBot HTTP API<input id="qqBase" placeholder="http://napcat:3000"></label>
+        <label>OneBot API Token<input id="qqApiToken" type="password"></label>
+        <label>Webhook Secret<input id="qqSecret" type="password" placeholder="单独生成随机密钥"></label>
+      </div>
+      <button id="addAccount">保存账号</button>
+      <p class="muted">QQ 使用在 NapCat 登录的真人账号；Telegram 真人账号通过 MTProto 验证码登录；Discord 仅提供官方 Bot 模式。</p>
+      <div id="accounts"></div>
+      <h2>Telegram 真人账号登录</h2>
+      <p class="muted">先添加 Telegram 真人账号；通过手机验证码与可选两步验证登录，登录会话仅保存在服务器，不会将验证码存储在浏览器。</p>
+      <div class="grid">
+        <label>选择 Telegram 账号<select id="tgAccount"></select></label>
+        <label>国际格式手机号<input id="tgPhone" autocomplete="tel" placeholder="+8613800000000"></label>
+      </div>
+      <button id="tgStart">请求登录验证码</button>
+      <div class="grid" style="margin-top:14px">
+        <label>Telegram 验证码<input id="tgCode" autocomplete="one-time-code"></label>
+        <label>两步验证密码（需要时）<input id="tgPassword" type="password" autocomplete="off"></label>
+      </div>
+      <div class="row"><button id="tgVerify">提交验证码</button><button id="tg2fa" class="secondary">提交两步验证密码</button><button id="tgLogout" class="danger">登出并撤销 Telegram 授权</button></div>
+      <h2 style="margin-top:25px">最近消息导入（手动）</h2>
+      <p class="muted">请先同步虚拟房间。仅支持 Telegram 真人账号，每次最多 50 条纯文本；会以当前时间写入 Matrix 时间线，不保留 Telegram 原始发送时间。重复导入会跳过已映射消息。</p>
+      <div class="grid">
+        <label>Telegram 会话 ID<input id="tgHistoryChat" placeholder="-100... 或私聊数字 ID"></label>
+        <label>条数<select id="tgHistoryLimit"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label>
+      </div>
+      <button id="tgHistory">导入最近消息</button>
+    </section>
+
+    <section class="panel">
+      <h2>虚拟房间 · 自动发现</h2>
+      <p class="muted">由 2BM 根据已登录的 QQ 好友/群聊和 Telegram 会话建立真实 Matrix 房间，并邀请账号控制者；无需手动复制房间 ID。只创建房间，不回填历史消息。</p>
+      <div class="grid">
+        <label>来源账号<select id="syncAccount"></select></label>
+        <label>本次最多同步<select id="syncLimit"><option value="20">20 个会话</option><option value="50" selected>50 个会话</option><option value="100">100 个会话</option></select></label>
+      </div>
+      <button id="syncChats">发现并同步虚拟房间</button>
+      <div id="virtualRooms"></div>
+      <h2 style="margin-top:25px">QQ 群成员同步</h2>
+      <p class="muted">仅对已映射的 QQ 群房间添加虚拟成员；大群需分批处理，成员变化也会通过 OneBot 通知增量同步。</p>
+      <div class="grid">
+        <label>QQ 账号<select id="qqAccount"></select></label>
+        <label>群聊 ID<input id="qqMemberChat" placeholder="group:123456"></label>
+        <label>每次数量<select id="qqMemberLimit"><option value="20" selected>20</option><option value="50">50</option><option value="100">100</option></select></label>
+      </div>
+      <button id="qqMembers">同步群成员</button>
+    </section>
+    <section class="panel">
+      <h2>Telegram MTProto 更新持久化队列</h2>
+      <p class="muted">Telegram 更新在保存到加密 SQLite 队列后才继续处理游标。可检查待处理数量和重试次数；不会展示消息正文。</p>
+      <div id="telegramInbox"></div>
+    </section>
+    <section class="panel">
+      <h2>QQ 消息与通知持久化队列</h2>
+      <p class="muted">QQ 私聊、群聊、撤回、群成员变更及跨设备自身消息均在 Webhook 返回成功前加密保存，由后台可靠投递。下方仅展示消息 ID 与重试状态，不展示正文。</p>
+      <div id="qqInbox"></div>
+    </section>
+    <section class="panel">
+      <h2>Matrix 加密兼容性警告</h2>
+      <p class="muted">2BM 暂不支持 Matrix 端到端加密。若客户端将桥接房间设为加密，相关消息无法正确转发。请停止使用该房间，在 Matrix 客户端新建未加密房间并重新配置映射。</p>
+      <div id="roomWarnings"></div>
+    </section>
+    <section class="panel">
+      <h2>发送故障与人工核对</h2>
+      <p class="muted">网络超时后，外部平台可能已经收到消息。为避免重复，2BM 会暂停这条消息的自动重试。请先在对应 QQ/Telegram 会话中检查消息：确认未发送再选“重试”，确认已发送则选“标记已送达”。操作有风险，不会自行判断平台是否收到。</p>
+      <div id="deliveryIssues"></div>
+    </section>
+    <section class="panel">
+      <h2>手动房间映射（高级）</h2>
+      <p class="muted">收到外部新会话时自动创建 Matrix 房间、邀请控制者及虚拟联系人；此处也可手动映射已有房间。</p>
+      <div class="grid">
+        <label>账号<select id="accountSelection"></select></label>
+        <label>外部聊天 ID<input id="externalChat" placeholder="Telegram -100... / Discord 频道 ID / QQ group:123"></label>
+        <label>Matrix 房间 ID<input id="matrixRoom" placeholder="!roomId:example.org"></label>
+      </div>
+      <button id="addMapping">添加映射</button>
+      <div id="mappings"></div>
+    </section>
+  </main>
+  <p id="message" role="status"></p>
+  <footer>2BM 0.1 · 所有后台 API 均要求管理员 Bearer Token · 建议通过 HTTPS 反向代理访问后台</footer>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let token = sessionStorage.getItem('two_bm_admin') || '';
+  let accounts = [];
+
+  async function api(path, options = {}) {
+    const response = await fetch('/api/admin/' + path, {
+      ...options,
+      headers: { 'Authorization': 'Bearer ' + token, ...(options.body ? {'Content-Type':'application/json'} : {}) },
+      cache: 'no-store'
+    });
+    if (response.status === 204) return null;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || ('HTTP ' + response.status));
+    return result;
+  }
+  function showMessage(err) { $('message').textContent = err ? String(err.message || err) : ''; }
+  function setLoggedIn(yes) {
+    $('login').classList.toggle('hidden', yes);
+    $('dashboard').classList.toggle('hidden', !yes);
+  }
+  async function refresh() {
+    accounts = await api('accounts');
+    const adapterStatus = await api('adapter-status');
+    const mappings = await api('mappings');
+    const virtualRooms = await api('virtual-rooms');
+    const deliveryIssues = await api('delivery-issues');
+    const roomWarnings = await api('room-warnings');
+    const qqInbox = await api('qq-inbox');
+    const telegramInbox = await api('telegram-inbox');
+    const queueCapacity = await api('queues/capacity');
+    $('accounts').replaceChildren();
+    $('accountSelection').replaceChildren();
+    $('tgAccount').replaceChildren();
+    $('syncAccount').replaceChildren();
+    $('qqAccount').replaceChildren();
+    for (const account of accounts) {
+      const option = document.createElement('option');
+      option.value = account.id;
+      option.textContent = account.label + ' (' + account.platform + ')';
+      $('accountSelection').append(option);
+      if (account.enabled && account.platform === 'qq') {
+        $('qqAccount').append(option.cloneNode(true));
+      }
+      if (account.enabled && (account.platform === 'qq' || account.platform === 'telegram_user')) {
+        $('syncAccount').append(option.cloneNode(true));
+      }
+      if (account.platform === 'telegram_user') {
+        const tgOption = option.cloneNode(true);
+        tgOption.textContent += account.enabled ? ' · 已验证' : ' · 待验证';
+        $('tgAccount').append(tgOption);
+      }
+      const activity = adapterStatus.find(s => s.account_id === account.id);
+      addRow($('accounts'), account.label + ' · ' + account.platform +
+        ' · ' + (activity?.state || '未连接') + ' · ' +
+        account.owner_mxid + ' · ' + account.id,
+        () => remove('accounts/', account.id));
+    }
+    $('virtualRooms').replaceChildren();
+    for (const room of virtualRooms) {
+      const source = accounts.find(a => a.id === room.account_id);
+      const row = document.createElement('div');
+      row.className = 'entry';
+      const title = document.createElement('span');
+      title.textContent = (source?.label || room.account_id) + ' · ' +
+        room.title + (room.direct ? ' · 私聊' : ' · 群聊') + ' · ' + room.external_chat;
+      row.append(title);
+      if (room.matrix_room) {
+        const link = document.createElement('a');
+        link.href = 'https://matrix.to/#/' + encodeURIComponent(room.matrix_room);
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = '打开 Matrix 房间 ↗';
+        link.style.color = '#8ab4ff';
+        row.append(link);
+      } else {
+        const status = document.createElement('span');
+        status.className = 'muted';
+        status.textContent = '尚未成功创建';
+        row.append(status);
+      }
+      $('virtualRooms').append(row);
+    }
+    $('telegramInbox').replaceChildren();
+    const tgSummary=document.createElement('p');
+    tgSummary.textContent='待投递：'+telegramInbox.pending+' 条';
+    $('telegramInbox').append(tgSummary);
+    for(const item of telegramInbox.entries){
+      const row=document.createElement('div');
+      row.className='entry';
+      row.textContent=item.source_key+' · 重试 '+item.attempts+
+        ' 次 · 下一次 '+item.next_attempt_at+
+        (item.last_error?' · '+item.last_error:'');
+      const retry=document.createElement('button');
+      retry.className='secondary';
+      retry.textContent='立即重试';
+      retry.addEventListener('click',()=>retryQueued(item));
+      row.append(retry);
+      $('telegramInbox').append(row);
+    }
+    $('qqInbox').replaceChildren();
+    for(const account of queueCapacity.accounts){
+      const row=document.createElement('p');
+      const percent=(account.pending/account.limit*100).toFixed(1);
+      row.textContent='账号 '+(accounts.find(a=>a.id===account.account_id)?.label
+        || account.account_id)+' · 队列 '+account.pending+'/'+account.limit+
+        ' ('+percent+'%)'+(account.pending>=account.limit*0.8
+        ? ' · 接近容量上限，请及时处理' : '');
+      $('qqInbox').append(row);
+    }
+    const queueCount=document.createElement('p');
+    queueCount.textContent='待投递：'+qqInbox.pending+' 条';
+    $('qqInbox').append(queueCount);
+    for(const item of qqInbox.entries){
+      const row=document.createElement('div');
+      row.className='entry';
+      row.textContent=item.source_key+' · 重试 '+item.attempts+
+        ' 次 · 下一次 '+item.next_attempt_at+
+        (item.last_error ? ' · '+item.last_error : '');
+      const retry=document.createElement('button');
+      retry.className='secondary';
+      retry.textContent='立即重试';
+      retry.addEventListener('click',()=>retryQueued(item));
+      row.append(retry);
+      $('qqInbox').append(row);
+    }
+    $('roomWarnings').replaceChildren();
+    for (const warning of roomWarnings) {
+      const row=document.createElement('p');
+      row.textContent=warning.matrix_room+' · 不支持加密 · 事件数 '+warning.event_count+
+        ' · '+warning.last_seen;
+      $('roomWarnings').append(row);
+    }
+    $('deliveryIssues').replaceChildren();
+    if (!deliveryIssues.length) {
+      const quiet = document.createElement('p');
+      quiet.className = 'muted';
+      quiet.textContent = '暂无需要人工处理的发送记录。';
+      $('deliveryIssues').append(quiet);
+    }
+    for (const issue of deliveryIssues) {
+      const row=document.createElement('div');
+      row.className='entry';
+      const content=document.createElement('span');
+      const source=accounts.find(a=>a.id===issue.account_id);
+      content.textContent=(source?.label||issue.account_id)+' · '+issue.external_chat+
+        ' · '+issue.status+' · '+issue.matrix_event+' · '+issue.updated_at;
+      const actions=document.createElement('span');
+      for (const [action,title] of [['retry','确认未发送 · 重试'],['acknowledge','确认已发送 · 跳过']]) {
+        const btn=document.createElement('button');
+        btn.className='secondary';
+        btn.textContent=title;
+        btn.addEventListener('click',()=>resolveDelivery(issue,action));
+        actions.append(btn);
+      }
+      row.append(content,actions);
+      $('deliveryIssues').append(row);
+    }
+    $('mappings').replaceChildren();
+    for (const mapping of mappings) {
+      const account = accounts.find(a => a.id === mapping.account_id);
+      addRow($('mappings'), (account ? account.label : mapping.account_id) +
+        ' · ' + mapping.external_chat + ' → ' + mapping.matrix_room,
+        () => remove('mappings/', mapping.id));
+    }
+  }
+  async function retryQueued(item){
+    if (!confirm('立即重试加密队列中的这条回调？\n若 Matrix 房间仍然加密，2BM 仍会拒绝明文投递。')) return;
+    try{
+      await api('queues/retry',{method:'POST',body:JSON.stringify({
+        account_id:item.account_id,source_key:item.source_key,kind:item.queue_kind
+      })});
+      showMessage('已将该回调安排为立即重试。');
+      await refresh();
+    }catch(error){showMessage(error);}
+  }
+  async function resolveDelivery(issue,action) {
+    const danger = action === 'retry'
+      ? '重新发送可能造成 QQ/Telegram 重复消息。请确认原消息没有发出。'
+      : '跳过可能丢失消息。请确认原消息已经发出。';
+    if (!confirm(danger + '\n确定处理 ' + issue.matrix_event + ' 吗？')) return;
+    try {
+      await api('delivery-issues/resolve',{method:'POST',body:JSON.stringify({
+        event_key:issue.event_key,action
+      })});
+      await refresh();
+      showMessage(action === 'retry'
+        ? '已解除发送锁定，待 Matrix Homeserver 重试事务。'
+        : '已记录人工确认送达，待 Matrix Homeserver 重试完成。');
+    } catch(e) {showMessage(e);}
+  }
+  function addRow(container, title, onDelete) {
+    const row = document.createElement('div');
+    row.className = 'entry';
+    const content = document.createElement('span');
+    content.textContent = title;
+    const button = document.createElement('button');
+    button.className = 'danger';
+    button.textContent = '删除';
+    button.addEventListener('click', onDelete);
+    row.append(content, button);
+    container.append(row);
+  }
+  async function remove(resource, id) {
+    if (!confirm('确定删除？关联数据可能会被级联删除。')) return;
+    try { await api(resource + id, {method:'DELETE'}); await refresh(); showMessage(); }
+    catch (err) { showMessage(err); }
+  }
+  async function login() {
+    token = $('token').value || token;
+    try {
+      await api('accounts');
+      sessionStorage.setItem('two_bm_admin', token);
+      $('token').value = '';
+      setLoggedIn(true);
+      await refresh();
+      showMessage();
+    } catch (err) { showMessage(err); }
+  }
+  $('loginButton').addEventListener('click', login);
+  $('logout').addEventListener('click', () => {
+    token = ''; sessionStorage.removeItem('two_bm_admin'); setLoggedIn(false);
+  });
+  $('platform').addEventListener('change', () => {
+    const isQq = $('platform').value === 'qq';
+    const isTg = $('platform').value === 'telegram_user';
+    $('qqFields').classList.toggle('hidden', !isQq);
+    $('tgFields').classList.toggle('hidden', !isTg);
+    $('botFields').classList.toggle('hidden', isQq || isTg);
+  });
+  $('addAccount').addEventListener('click', async () => {
+    try {
+      const platform = $('platform').value;
+      const credentials = platform === 'qq'
+        ? {api_base: $('qqBase').value.trim(), access_token: $('qqApiToken').value, hook_secret: $('qqSecret').value}
+        : platform === 'telegram_user'
+          ? {api_id: Number($('tgApiId').value), api_hash:$('tgApiHash').value}
+          : {token: $('botToken').value};
+      await api('accounts', {method:'POST', body:JSON.stringify({platform, label:$('label').value, owner_mxid:$('ownerMxid').value.trim(), credentials})});
+      for (const field of ['botToken','qqApiToken','qqSecret','tgApiHash']) $(field).value = '';
+      await refresh(); showMessage();
+    } catch(err) { showMessage(err); }
+  });
+  async function tgLogin(action, value) {
+    const id = $('tgAccount').value;
+    if (!id) { showMessage('请先添加 Telegram 真人账号'); return; }
+    try {
+      const result = await api('accounts/' + encodeURIComponent(id) + '/telegram/' + action, {
+        method:'POST', body:JSON.stringify(action === 'start' ? {phone:value} : {value})
+      });
+      showMessage('Telegram 登录状态：' + result.status);
+      if (result.status === 'ready') await refresh();
+    } catch(err) { showMessage(err); }
+  }
+  $('tgStart').addEventListener('click', () => tgLogin('start',$('tgPhone').value.trim()));
+  $('tgVerify').addEventListener('click', () => tgLogin('verify',$('tgCode').value.trim()));
+  $('tg2fa').addEventListener('click', () => tgLogin('verify',$('tgPassword').value));
+  $('tgLogout').addEventListener('click', async () => {
+    const id=$('tgAccount').value;
+    if (!id || !confirm('此操作会在 Telegram 服务器撤销本桥接会话授权，确认登出？')) return;
+    try {
+      await api('accounts/'+encodeURIComponent(id)+'/telegram/logout',{
+        method:'POST',body:JSON.stringify({})
+      });
+      await refresh();
+      showMessage('Telegram 远端授权已撤销。此账号现在可以安全删除本地文件。');
+    }catch(error){showMessage(error);}
+  });
+  $('tgHistory').addEventListener('click', async () => {
+    const id=$('tgAccount').value, chat=$('tgHistoryChat').value.trim();
+    if (!id || !chat) { showMessage('请选择 Telegram 账号并填写会话 ID');return; }
+    if (!confirm('导入的消息会以当前时间显示在 Matrix 房间中。继续？')) return;
+    $('tgHistory').disabled=true;
+    try {
+      const result=await api('accounts/'+encodeURIComponent(id)+'/telegram/history',{
+        method:'POST',body:JSON.stringify({chat,limit:Number($('tgHistoryLimit').value)})
+      });
+      showMessage('扫描 '+result.fetched+'，导入 '+result.imported+
+        '，重复 '+result.already_present+'，空内容 '+result.skipped_empty+'，失败 '+result.failed);
+    } catch(e) {showMessage(e);} finally {$('tgHistory').disabled=false;}
+  });
+  $('qqMembers').addEventListener('click', async () => {
+    const id=$('qqAccount').value,chat=$('qqMemberChat').value.trim();
+    if (!id || !/^group:[0-9]+$/.test(chat)) {showMessage('请选择 QQ 账号并填写 group:数字');return;}
+    $('qqMembers').disabled=true;
+    try {
+      const result=await api('accounts/'+encodeURIComponent(id)+'/qq/members',{
+        method:'POST',body:JSON.stringify({chat,limit:Number($('qqMemberLimit').value)})
+      });
+      showMessage('群成员共 '+result.discovered+'，本批同步 '+result.joined+'，已存在 '+result.already_present+'，失败 '+result.failed);
+    } catch(e) {showMessage(e);} finally {$('qqMembers').disabled=false;}
+  });
+  $('syncChats').addEventListener('click', async () => {
+    const id = $('syncAccount').value;
+    if (!id) { showMessage('请先登录 QQ 或 Telegram 真人账号'); return; }
+    $('syncChats').disabled = true;
+    showMessage('正在同步，请勿重复提交。');
+    try {
+      const result = await api('accounts/' + encodeURIComponent(id) + '/sync', {
+        method: 'POST',
+        body: JSON.stringify({limit:Number($('syncLimit').value)})
+      });
+      await refresh();
+      showMessage('发现 ' + result.discovered + ' 个会话，本次处理 ' +
+        result.provisioned + ' 个，已存在 ' + result.already_present +
+        ' 个，失败 ' + result.failed + ' 个。');
+    } catch(err) { showMessage(err); }
+    finally { $('syncChats').disabled = false; }
+  });
+  $('addMapping').addEventListener('click', async () => {
+    try {
+      await api('mappings', {method:'POST', body:JSON.stringify({
+        account_id:$('accountSelection').value,
+        external_chat:$('externalChat').value.trim(),
+        matrix_room:$('matrixRoom').value.trim()
+      })});
+      await refresh(); showMessage();
+    } catch(err) { showMessage(err); }
+  });
+  if (token) login();
+})();
+</script>
+</body>
+</html>

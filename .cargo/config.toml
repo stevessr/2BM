@@ -1,0 +1,4 @@
+# Grammers' libsql-ffi bundles SQLite; let SQLx link the system library.
+# Otherwise two separate sqlite3 implementations export duplicate symbols.
+[env]
+LIBSQLITE3_SYS_USE_PKG_CONFIG = "1"
