@@ -29,7 +29,8 @@ pub async fn drain_qq_own(state:&Arc<AppState>,limit:i64)->Result<usize>{
     for (key,account,sealed) in items {
         // Do not lose a queued message if the decryption key is misconfigured;
         // the record stays in SQLite for operator-controlled recovery.
-        let result:Result<()> = async {
+        let result:Result<()> = tokio::time::timeout(
+            std::time::Duration::from_secs(20), async {
             // Accounts can be disabled between durable HTTP ACK and worker
             // delivery. Retain the envelope instead of silently discarding
             // it through relay::incoming's disabled-account no-op.
@@ -48,7 +49,8 @@ pub async fn drain_qq_own(state:&Arc<AppState>,limit:i64)->Result<usize>{
                 state,&account,chat,msg_id,&format!("qq-self:{account}"),
                 "Me (QQ)",text
             ).await
-        }.await;
+        }).await.unwrap_or_else(|_|Err(anyhow::anyhow!(
+            "QQ self-message bridge attempt timed out")));
         match result {
             Ok(())=>{
                 sqlx::query("DELETE FROM qq_own_inbox WHERE source_key=?")
@@ -92,7 +94,8 @@ pub async fn drain_qq_events(state:&Arc<AppState>,limit:i64)->Result<usize>{
         .bind(limit.clamp(1,100)).fetch_all(&state.pool).await?;
     let mut processed=0;
     for (key,account_id,sealed) in items {
-        let outcome:Result<()> = async {
+        let outcome:Result<()> = tokio::time::timeout(
+            std::time::Duration::from_secs(20), async {
             let account=crate::db::account(&state.pool,&account_id).await?
                 .filter(|a|a.enabled && a.platform=="qq")
                 .context("QQ account disabled; event must remain queued")?;
@@ -127,7 +130,8 @@ pub async fn drain_qq_events(state:&Arc<AppState>,limit:i64)->Result<usize>{
                 anyhow::bail!("unsupported QQ callback queued");
             }
             Ok(())
-        }.await;
+        }).await.unwrap_or_else(|_|Err(anyhow::anyhow!(
+            "QQ callback bridge attempt timed out")));
         match outcome {
             Ok(())=>{
                 sqlx::query("DELETE FROM qq_events_inbox WHERE source_key=?")
@@ -176,7 +180,8 @@ pub async fn drain_telegram(state:&Arc<AppState>,limit:i64)->Result<usize>{
         .bind(limit.clamp(1,100)).fetch_all(&state.pool).await?;
     let mut delivered=0;
     for (key,account_id,sealed) in items {
-        let outcome:Result<()> = async {
+        let outcome:Result<()> = tokio::time::timeout(
+            std::time::Duration::from_secs(20), async {
             let active=crate::db::account(&state.pool,&account_id).await?
                 .is_some_and(|a|a.enabled && a.platform=="telegram_user");
             if !active {
@@ -199,7 +204,8 @@ pub async fn drain_telegram(state:&Arc<AppState>,limit:i64)->Result<usize>{
                     payload["reply_to"].as_str()).await?;
             }
             Ok(())
-        }.await;
+        }).await.unwrap_or_else(|_|Err(anyhow::anyhow!(
+            "Telegram inbound bridge attempt timed out")));
         match outcome {
             Ok(())=>{
                 sqlx::query("DELETE FROM telegram_events_inbox WHERE source_key=?")
@@ -228,18 +234,35 @@ pub async fn telegram_pending_count(state:&Arc<AppState>)->Result<i64>{
 
 /// Process encrypted QQ callbacks independently from account discovery.
 pub async fn run_worker(state:Arc<AppState>){
-    loop {
-        if let Err(error)=drain_qq_own(&state,100).await {
-            tracing::warn!(%error,"QQ self-message inbox drain failed");
+    // Keep independent consumer futures. A slow or disconnected upstream
+    // must not prevent another platform's encrypted inbox from draining.
+    let own_state=state.clone();
+    let qq_state=state.clone();
+    let own_loop=async move {
+        loop {
+            if let Err(error)=drain_qq_own(&own_state,20).await {
+                tracing::warn!(%error,"QQ self-message inbox drain failed");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
-        if let Err(error)=drain_qq_events(&state,100).await {
-            tracing::warn!(%error,"QQ callback inbox drain failed");
+    };
+    let qq_loop=async move {
+        loop {
+            if let Err(error)=drain_qq_events(&qq_state,20).await {
+                tracing::warn!(%error,"QQ callback inbox drain failed");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
-        if let Err(error)=drain_telegram(&state,100).await {
-            tracing::warn!(%error,"Telegram update inbox drain failed");
+    };
+    let tg_loop=async move {
+        loop {
+            if let Err(error)=drain_telegram(&state,20).await {
+                tracing::warn!(%error,"Telegram update inbox drain failed");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
+    };
+    let _=tokio::join!(own_loop,qq_loop,tg_loop);
 }
 
 pub async fn queued_count(state:&Arc<AppState>)->Result<i64>{
