@@ -16,7 +16,7 @@ use axum::Router;
 use config::Config;
 use sqlx::SqlitePool;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
-use tracing::info;
+use tracing::{info,warn};
 
 pub struct AppState {
     pub config: Config,
@@ -49,6 +49,12 @@ async fn main() -> Result<()> {
         .user_agent("2BM/0.1")
         .build()?;
     let state = Arc::new(AppState { config, pool, http, telegram: telegram_user::Gateway::default(), room_creation: tokio::sync::Mutex::new(()), delivery_lock: tokio::sync::Mutex::new(()), transaction_lock: tokio::sync::Mutex::new(()) });
+
+    let interrupted=delivery::recover_interrupted(&state).await?;
+    if interrupted>0 {
+        warn!(interrupted,
+            "unconfirmed outgoing sends were interrupted; operator must reconcile");
+    }
 
     // A service that serves 200 /healthz without a functional appservice
     // silently loses messages. Fail startup until the homeserver registration

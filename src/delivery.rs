@@ -21,6 +21,18 @@ pub struct Attempt {
     pub updated_at: String,
 }
 
+/// Before accepting application-service traffic after a restart, every
+/// interrupted "sending" attempt becomes an explicit operator incident.
+/// The remote API may have accepted the message immediately before the crash.
+pub async fn recover_interrupted(state:&Arc<AppState>)->Result<u64>{
+    let result=sqlx::query(
+        "UPDATE delivery_attempts SET status='uncertain',
+         last_error='Bridge restarted during remote send; verify source before retry',
+         updated_at=CURRENT_TIMESTAMP WHERE status='sending'")
+         .execute(&state.pool).await?;
+    Ok(result.rows_affected())
+}
+
 pub async fn begin(
     state:&Arc<AppState>,event_key:&str,account_id:&str,event_id:&str,chat:&str
 )->Result<()> {
@@ -130,6 +142,10 @@ mod tests {
             transaction_lock:tokio::sync::Mutex::new(()),
         });
         begin(&state,"event:a","a","$evt","private:2").await.unwrap();
+        assert!(begin(&state,"event:a","a","$evt","private:2").await.is_err());
+        assert_eq!(recover_interrupted(&state).await.unwrap(),1);
+        let interrupted=list_unresolved(&state).await.unwrap();
+        assert_eq!(interrupted[0].status,"uncertain");
         assert!(begin(&state,"event:a","a","$evt","private:2").await.is_err());
         uncertain(&state,"event:a","remote request timed out").await.unwrap();
         let pending=list_unresolved(&state).await.unwrap();
