@@ -74,6 +74,16 @@ pub async fn recall(
     Ok(())
 }
 
+/// Matrix clients prepend quoted text as a plaintext fallback for replies.
+/// This quote is not part of the new user's actual message.
+fn strip_reply_fallback<'a>(text:&'a str,is_reply:bool)->&'a str {
+    if !is_reply || !text.starts_with("> ") {return text;}
+    match text.split_once("\n\n") {
+        Some((quote,body)) if quote.lines().all(|line|line.starts_with("> ")) && !body.is_empty()
+            => body,
+        _ => text,
+    }
+}
 pub async fn matrix_event(state: &Arc<AppState>, event: &Value) -> Result<()> {
     let kind = event["type"].as_str().unwrap_or_default();
     if kind == "m.room.member" {
@@ -88,14 +98,40 @@ pub async fn matrix_event(state: &Arc<AppState>, event: &Value) -> Result<()> {
     if !matches!(event["content"]["msgtype"].as_str(),Some("m.text"|"m.emote")) { return Ok(()); }
     let Some(room) = event["room_id"].as_str() else { return Ok(()); };
     let Some(event_id) = event["event_id"].as_str() else { return Ok(()); };
-    let Some(body) = event["content"]["body"].as_str().filter(|s| !s.trim().is_empty()) else { return Ok(()); };
+    // Matrix edits use m.replace + m.new_content; forwarding them as a new
+    // message would silently duplicate the old message on the source platform.
+    if event["content"]["m.relates_to"]["rel_type"] == "m.replace" {
+        return Ok(());
+    }
+    let Some(raw_body)=event["content"]["body"].as_str().filter(|s|!s.trim().is_empty()) else {
+        return Ok(());
+    };
+    let reply_event=event["content"]["m.relates_to"]["m.in_reply_to"]["event_id"].as_str();
+    let body=strip_reply_fallback(raw_body,reply_event.is_some());
     for mapping in db::mappings_for_room(&state.pool,room).await? {
         let key = format!("{event_id}:{}",mapping.id);
         if db::has_key(&state.pool,"outgoing","event_key",&key).await? { continue; }
         let Some(account) = db::account(&state.pool,&mapping.account_id).await? else { continue; };
         // A joined stranger cannot operate a foreign user's account.
         if !account.enabled || sender != account.owner_mxid { continue; }
-        adapters::send(state,&account,&mapping.external_chat,body).await?;
+        // Use a native QQ reply segment only when the quoted Matrix event
+        // was actually bridged from THIS account and THIS external chat.
+        let remote_reply=if let Some(reply_event)=reply_event {
+            sqlx::query_scalar::<_,String>(
+                "SELECT external_message FROM event_links
+                 WHERE account_id=? AND external_chat=? AND matrix_room=?
+                   AND matrix_event=? LIMIT 1")
+                .bind(&account.id).bind(&mapping.external_chat)
+                .bind(room).bind(reply_event)
+                .fetch_optional(&state.pool).await?
+        } else {None};
+        if account.platform=="qq" {
+            let secrets=adapters::credentials(state,&account)?;
+            crate::adapters::qq::send_reply(state,&secrets,&mapping.external_chat,
+                body,remote_reply.as_deref()).await?;
+        } else {
+            adapters::send(state,&account,&mapping.external_chat,body).await?;
+        }
         sqlx::query("INSERT OR IGNORE INTO outgoing(event_key) VALUES (?)")
             .bind(key).execute(&state.pool).await?;
     }
@@ -147,6 +183,14 @@ mod tests {
             room_creation:tokio::sync::Mutex::new(()),
         });
         (state,counter,task,path)
+    }
+
+    #[test]
+    fn reply_fallback_is_removed_without_harming_regular_quotes() {
+        assert_eq!(strip_reply_fallback("> <alice> first\n> quoted line\n\nsecond",true),"second");
+        assert_eq!(strip_reply_fallback("> normal markdown\n\nparagraph",false),
+            "> normal markdown\n\nparagraph");
+        assert_eq!(strip_reply_fallback("plain",true),"plain");
     }
 
     #[tokio::test]

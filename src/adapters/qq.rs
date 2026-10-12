@@ -4,18 +4,33 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 pub async fn send(state: &Arc<AppState>, credentials: &Value, chat: &str, text: &str) -> Result<()> {
+    send_reply(state,credentials,chat,text,None).await
+}
+pub fn outbound_segments(text:&str,reply_to:Option<&str>)->Vec<Value>{
+    let mut segments=Vec::new();
+    if let Some(reply_to)=reply_to.filter(|s| !s.is_empty()) {
+        segments.push(json!({"type":"reply","data":{"id":reply_to}}));
+    }
+    segments.push(json!({"type":"text","data":{"text":text}}));
+    segments
+}
+pub async fn send_reply(
+    state: &Arc<AppState>, credentials: &Value, chat: &str,
+    text: &str, reply_to: Option<&str>
+) -> Result<()> {
     let api_base = token(credentials, "api_base")?.trim_end_matches('/');
     let (kind, id) = chat.split_once(':')
         .context("QQ chat must use group:<id> or private:<id>")?;
     let numeric_id: i64 = id.parse().context("QQ target id must be an integer")?;
+    let segments=outbound_segments(text,reply_to);
     let (action, request) = match kind {
         "group" => ("send_group_msg", json!({
             "group_id": numeric_id,
-            "message": [{"type": "text", "data": {"text": text}}]
+            "message": segments
         })),
         "private" => ("send_private_msg", json!({
             "user_id": numeric_id,
-            "message": [{"type": "text", "data": {"text": text}}]
+            "message": segments
         })),
         _ => bail!("QQ chat must be group:<id> or private:<id>"),
     };
@@ -173,6 +188,13 @@ pub fn chat_id(event: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn build_native_onebot_reply_segments() {
+        let result=outbound_segments("second",Some("123"));
+        assert_eq!(result[0],json!({"type":"reply","data":{"id":"123"}}));
+        assert_eq!(result[1],json!({"type":"text","data":{"text":"second"}}));
+        assert_eq!(outbound_segments("plain",None).len(),1);
+    }
     #[test]
     fn classify_membership_notices() {
         assert_eq!(membership_target(&json!({"notice_type":"group_increase","group_id":12,"user_id":34})),
