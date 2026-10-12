@@ -174,10 +174,7 @@ def main():
                 m["external_chat"]=="private:123"),None),"self-first Matrix room")
         from uuid import uuid5,NAMESPACE_URL
         expected="@_2bm_p_"+uuid5(NAMESPACE_URL,f"{second}:123").hex+":smoke.test"
-        created=api("GET",HS,f"/_matrix/client/v3/rooms/{quote(second_room,safe='')}/state/m.room.create",
-            token=owner)
-        # /state returns content, not the event envelope; query /messages for
-        # the m.room.create event after joining the invited owner.
+        # Join the invited owner before inspecting the m.room.create sender.
         api("POST",HS,f"/_matrix/client/v3/join/{quote(second_room,safe='')}",{},owner)
         creation=next(e for e in messages(owner,second_room) if e["type"]=="m.room.create")
         assert creation["sender"]==expected,creation
